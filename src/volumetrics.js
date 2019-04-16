@@ -22,7 +22,7 @@ Volume = function Volume(){
 	this.channels = 1;
 
 	//Arraybuffer with all voxels. Dimensions increase in this order: width, height, depth
-	this.dataBuffer = null;
+	this._dataBuffer = null;
 	this._dataView = null;
 
 	//Values that need to be precomputed. They only make sense in the case of 1 channel
@@ -61,7 +61,7 @@ Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer)
 		console.warn("Only works with multiples of 8!")
 	}
 
-	this.dataBuffer = dataBuffer;
+	this._dataBuffer = dataBuffer;
 
 	//Erase previous values if it's updated
 	this._histogram = null;
@@ -70,8 +70,8 @@ Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer)
 }
 
 Volume.prototype.isValid = function(){
-	if(this.width > 0 && this.height > 0 && this.depth > 0 && this.dataBuffer != null){
-		return (Math.ceil(this.getNumberOfVoxels() * this.voxelDepth / 8) == this.dataBuffer.byteLength);
+	if(this.width > 0 && this.height > 0 && this.depth > 0 && this._dataBuffer != null){
+		return (Math.ceil(this.getNumberOfVoxels() * this.voxelDepth / 8) == this._dataBuffer.byteLength);
 	}
 	return false;
 }
@@ -83,7 +83,7 @@ Volume.prototype.getNumberOfVoxels = function(){
 //Can accept both absolute i and (i, j, k)
 Volume.prototype.getVoxel = function(i, j, k){
 	if(this._dataView == null){
-		this._dataView = new DataView(this.dataBuffer);
+		this._dataView = new DataView(this._dataBuffer);
 	}
 
 	if(j != undefined && k != undefined){
@@ -114,7 +114,7 @@ Volume.prototype.getDataTexture = function(){
 
 	if(this._dataTexture == null){
 		var format = gl.LUMINANCE;	//TODO compute format depending on channels
-		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, texture_type: GL.TEXTURE_3D, format: format, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE, pixel_data: this.dataBuffer});
+		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, texture_type: GL.TEXTURE_3D, format: format, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE, pixel_data: this._dataView});
 	}
 
 	return this._dataTexture;
@@ -164,7 +164,7 @@ TransferFunction = function TransferFunction(){
 	this.width = 256;
 
 	//4 segmented lines, 1 for each channel
-	this.R = [{x:0,y:0},{x:1,y:1}];
+	this.R = [{x:0,y:0},{x:0.33,y:1},{x:0.66,y:0},{x:1,y:1}];
 	this.G = [{x:0,y:0},{x:1,y:1}];
 	this.B = [{x:0,y:0},{x:1,y:1}];
 	this.A = [{x:0,y:0},{x:1,y:1}];
@@ -311,7 +311,8 @@ TransferFunction.prototype.getTexture = function(){
 		this.getTransferFunction();
 
 		//Create GLTexture using that arraybuffer
-		this._texture = new GL.Texture(this.width, 1, {texture_type: GL.TEXTURE_2D, format: gl.RGBA, magFilter: gl.NEAREST, pixel_data: this._buffer});
+		this._texture = new GL.Texture(this.width, 1, {texture_type: GL.TEXTURE_2D, format: gl.RGBA, magFilter: gl.NEAREST, pixel_data: this._view});
+		this._needUpload = false;
 	}
 
 	if(this._needUpload){
@@ -529,7 +530,7 @@ TFEditor.prototype.addPoint = function(x, y){
 
 //Selects all points inside the bounding box
 TFEditor.prototype.select = function(min, max){
-	
+
 }
 
 TFEditor.prototype._onMouseDown = function(event){
@@ -591,7 +592,7 @@ TFEditor.prototype.drawGraph = function(){
 		}
 		ctx.lineTo(w0+w, y);
 		ctx.stroke();
-		
+
 		ctx.lineWidth = 1;
 		for(var j=0; j<C.length; j++){
 			x = w0 	 + w*C[j].x;
@@ -659,9 +660,23 @@ TFEditor.prototype.render = function(){
  * Represents volume + tf + shader
  ***/
 VolumeNode = function VolumeNode(){
+	this._ctor();
+}
+
+VolumeNode.prototype._ctor = function(){
+	RD.SceneNode.prototype._ctor.call(this);
+
 	this._volume = null;
 	this._tf = null;
-	this.node = new RD.SceneNode();
+	this._wireframeNode = new RD.SceneNode();
+	this._wireframeNode.primitive = GL.LINES;
+	this.addChild(this._wireframeNode);
+
+	this.eye = [0,0,0];
+	this.background = [0,0,0,0];
+	this.intensity = 1;
+	this.stepSize = 1;
+	this.steps = 8;
 }
 
 Object.defineProperty(VolumeNode.prototype, "volume", {
@@ -670,8 +685,11 @@ Object.defineProperty(VolumeNode.prototype, "volume", {
 	},
 	set: function(v) {
 		this._volume = v;
-		this.node.textures.volume = v;
-		this.node.mesh = v;
+		this.textures.volume = v;
+		this.mesh = v;
+		this._wireframeNode.mesh = v;
+
+		this.dimensions = [v.width * v.widthSpacing, v.height * v.heightSpacing, v.depth * v.depthSpacing];
 	},
 });
 
@@ -681,26 +699,73 @@ Object.defineProperty(VolumeNode.prototype, "tf", {
 	},
 	set: function(v) {
 		this._tf = v;
-		this.node.textures.tf = v;
+		this.textures.tf = v;
 	},
 });
 
-Object.defineProperty(VolumeNode.prototype, "shader", {
+Object.defineProperty(VolumeNode.prototype, "dimensions", {
 	get: function() {
-		return this.node.shader;
+		return this.uniforms.u_dimensions;
 	},
 	set: function(v) {
-		this.node.shader = v;
+		this.uniforms.u_dimensions = v;
+	},
+});
+
+Object.defineProperty(VolumeNode.prototype, "eye", {
+	get: function() {
+		return this.uniforms.u_eye;
+	},
+	set: function(v) {
+		this.uniforms.u_eye = v;
+	},
+});
+
+Object.defineProperty(VolumeNode.prototype, "background", {
+	get: function() {
+		return this.uniforms.u_background;
+	},
+	set: function(v) {
+		this.uniforms.u_background = v;
+	},
+});
+
+Object.defineProperty(VolumeNode.prototype, "intensity", {
+	get: function() {
+		return this.uniforms.u_intensity;
+	},
+	set: function(v) {
+		this.uniforms.u_intensity = v;
+	},
+});
+
+Object.defineProperty(VolumeNode.prototype, "stepSize", {
+	get: function() {
+		return this.uniforms.u_stepSize;
+	},
+	set: function(v) {
+		this.uniforms.u_stepSize = v;
+	},
+});
+
+Object.defineProperty(VolumeNode.prototype, "steps", {
+	get: function() {
+		return this.uniforms.u_eye;
+	},
+	set: function(v) {
+		this.uniforms.steps = v;
 	},
 });
 
 VolumeNode.prototype.hide = function(){
-	this.node.flags.visible = false;
+	this.flags.visible = false;
 }
 
 VolumeNode.prototype.show = function(){
-	this.node.flags.visible = true;
+	this.flags.visible = true;
 }
+
+extendClass( VolumeNode, RD.SceneNode );
 
 
 /***
@@ -739,6 +804,8 @@ Volumetrics = function Volumetrics(options){
 
 	};
 
+	this.background = [0.7,0.7,0.9,1];
+
 	this.init();
 }
 
@@ -751,7 +818,7 @@ Volumetrics.prototype.init = function(){
 	this.addTransferFunction(defaultTF, "tf_default");
 
 	//Load shaders
-	var shaderStrings = {
+	var volumetricShaderStrings = {
 	"sh_default": {
 		v: '\
             #version 300 es\n\
@@ -824,11 +891,10 @@ Volumetrics.prototype.init = function(){
                 cdest = u_background * (1.0 - cdest.w) + cdest;\n\
                 color = cdest;\n\
             }\n\
-        '},
-	};
+        '},};
 
-	for(var s of Object.keys(shaderStrings)){
-		var shader = new GL.Shader(shaderStrings[s].v, shaderStrings[s].f);
+	for(var s of Object.keys(volumetricShaderStrings)){
+		var shader = new GL.Shader(volumetricShaderStrings[s].v, volumetricShaderStrings[s].f);
 		this.renderer.shaders[s] = shader;
 	}
 }
@@ -842,6 +908,9 @@ Volumetrics.prototype.update = function(dt){
 }
 
 Volumetrics.prototype.render = function(){
+	//clear
+	this.renderer.clear(this.background);
+
 	//render Scene
 	this.renderer.render(this.scene, this.camera);
 
@@ -906,6 +975,9 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 		volNode.shader = "sh_default";
 	}
 
+	volNode.eye = this.camera.position;
+	volNode.background = this.background;
+
 	this.volumeNodes[name] = volNode;
-	this.scene._root.addChild(volNode.node);
+	this.scene._root.addChild(volNode);
 }
