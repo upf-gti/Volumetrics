@@ -20,28 +20,7 @@ function init(){
 	app.tfeditor.tf = tf;
     app.tfeditor.render();
 
-    var d = 8;
-    var dd = d*d;
-    var buffer = new ArrayBuffer(d*d*d);
-    var view = new Uint8Array(buffer);
-    for(var i=0; i<d; i++){
-        for(var j=0; j<d; j++){
-            for(var k=0; k<d; k++){
-                view[i + j*d + k*dd] = 4 * i * j * k;
-            }
-        }
-    }
-    app.volumetrics.addTransferFunction(tf, "mytf")
-
-    var vol = Volume.create(d, d, d, {}, buffer);
-    app.volumetrics.addVolume(vol, "test");
-
-    var node = new VolumeNode();
-    node.volume = "test";
-    node.tf = "mytf";
-    app.volumetrics.addVolumeNode(node);
-
-    
+    app.volumetrics.addTransferFunction(tf, "mytf");
 }
 
 init();

@@ -62,11 +62,11 @@ Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer)
 	}
 
 	this._dataBuffer = dataBuffer;
+	this._dataView = new Uint8Array(this._dataBuffer);
 
 	//Erase previous values if it's updated
 	this._histogram = null;
 	this._gradient = null;
-	this._dataView = null;
 }
 
 Volume.prototype.isValid = function(){
@@ -82,10 +82,6 @@ Volume.prototype.getNumberOfVoxels = function(){
 
 //Can accept both absolute i and (i, j, k)
 Volume.prototype.getVoxel = function(i, j, k){
-	if(this._dataView == null){
-		this._dataView = new DataView(this._dataBuffer);
-	}
-
 	if(j != undefined && k != undefined){
 		i = i + this.width*j + this.width*this.height*k;
 	}
@@ -95,15 +91,7 @@ Volume.prototype.getVoxel = function(i, j, k){
 
 	var voxelDepthBytesPerChannel = this._voxelDepthBytes / this.channels;
 	for(var c=0; c<this.channels; c++){
-
-		if(voxelDepthBytesPerChannel == 1){
-			voxel.push(this._dataView.getUint8(i + c));
-		}else if(voxelDepthBytesPerChannel == 2){
-			voxel.push(this._dataView.getUint16(i + 2*c));
-		}else if(voxelDepthBytesPerChannel == 4){
-			voxel.push(this._dataView.getUint32(i + 4*c));
-		}
-
+		voxel.push(this._dataView[i+c]);
 	}
 
 	return voxel;
@@ -668,9 +656,6 @@ VolumeNode.prototype._ctor = function(){
 
 	this._volume = null;
 	this._tf = null;
-	this._wireframeNode = new RD.SceneNode();
-	this._wireframeNode.primitive = GL.LINES;
-	this.addChild(this._wireframeNode);
 
 	this.eye = [0,0,0];
 	this.background = [0,0,0,0];
@@ -687,9 +672,6 @@ Object.defineProperty(VolumeNode.prototype, "volume", {
 		this._volume = v;
 		this.textures.volume = v;
 		this.mesh = v;
-		this._wireframeNode.mesh = v;
-
-		this.dimensions = [v.width * v.widthSpacing, v.height * v.heightSpacing, v.depth * v.depthSpacing];
 	},
 });
 
@@ -753,7 +735,7 @@ Object.defineProperty(VolumeNode.prototype, "steps", {
 		return this.uniforms.u_eye;
 	},
 	set: function(v) {
-		this.uniforms.steps = v;
+		this.uniforms.u_steps = v;
 	},
 });
 
@@ -801,7 +783,15 @@ Volumetrics = function Volumetrics(options){
 
 	//State (for inputs)
 	this.state = {
+		focusCamera: true,	//only when true keys and mouse will affect camera
+		mouse:{
+			dx: 0,
+			dy: 0,
+		},
+		keyboard:{
 
+		},
+		
 	};
 
 	this.background = [0.7,0.7,0.9,1];
@@ -810,8 +800,8 @@ Volumetrics = function Volumetrics(options){
 }
 
 Volumetrics.prototype.init = function(){
-	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 1000 );
-	this.camera.lookAt( [100,100,100],[0,0,0],[0,1,0] );
+	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
+	this.camera.lookAt( [100,100,100], [0,0,0], [0,1,0] );
 
 	//Add default tf
 	var defaultTF = new TransferFunction();
@@ -891,17 +881,92 @@ Volumetrics.prototype.init = function(){
                 cdest = u_background * (1.0 - cdest.w) + cdest;\n\
                 color = cdest;\n\
             }\n\
-        '},};
+        '},
+    };
 
 	for(var s of Object.keys(volumetricShaderStrings)){
 		var shader = new GL.Shader(volumetricShaderStrings[s].v, volumetricShaderStrings[s].f);
 		this.renderer.shaders[s] = shader;
+	}
+
+	//Mouse actions
+	gl.captureMouse();
+	this.renderer.context.onmousedown = this.onmousedown.bind(this);
+	this.renderer.context.onmousemove = this.onmousemove.bind(this);
+
+	//Key actions
+	gl.captureKeys();
+	this.renderer.context.onkey = this.onkey.bind(this);
+}
+
+Volumetrics.prototype.onmousedown = function(e){
+
+}
+
+Volumetrics.prototype.onmousemove = function(e){
+	if(e.dragging){
+		this.state.mouse.dx += e.deltax;
+		this.state.mouse.dy += e.deltay;
+	}
+}
+
+Volumetrics.prototype.onkey = function(e){
+	if(e.eventType == "keydown"){
+		this.state.keyboard[e.key] = true;
+	}else if(e.eventType == "keyup"){
+		this.state.keyboard[e.key] = false;
 	}
 }
 
 Volumetrics.prototype.update = function(dt){
 	for(var k of Object.keys(this.tfs)){
 		this.tfs[k].update();
+	}
+
+	for(var v of Object.keys(this.volumeNodes)){
+		this.volumeNodes[v].eye = this.camera.position;
+	}
+
+	//Update camera
+	if(this.state.focusCamera){
+		var front = vec3.clone(this.camera.getFront());
+		var up = vec3.clone(this.camera.up);
+		var right = vec3.clone(this.camera._right);
+
+		vec3.normalize( front, front );
+		vec3.normalize( up, up );
+		vec3.normalize( right, right );
+
+		var pos = vec3.clone(this.camera.position);
+		var target = vec3.clone(this.camera.target);
+
+		var v = dt*(this.state.keyboard.Shift ? 1000 : 100);
+
+		if(this.state.keyboard.w){
+			vec3.add(pos, pos, vec3.scale(front, front, v));
+		}
+
+		if(this.state.keyboard.s){
+			vec3.add(pos, pos, vec3.scale(front, front, -v));
+		}
+
+		if(this.state.keyboard.d){
+			vec3.add(pos, pos, vec3.scale(right, right, v));
+		}
+
+		if(this.state.keyboard.a){
+			vec3.add(pos, pos, vec3.scale(right, right, -v));
+		}
+
+		if(this.state.keyboard.e){
+			vec3.add(pos, pos, vec3.scale(up, up, v));
+		}
+
+		if(this.state.keyboard.q){
+			vec3.add(pos, pos, vec3.scale(up, up, -v));
+		}
+
+		this.camera.position = pos;
 	}
 
 	this.scene.update(dt);
@@ -931,7 +996,7 @@ Volumetrics.prototype.animate = function(){
 Volumetrics.prototype.addVolume = function(volume, name){
 	name = name || ("volume_" + Object.keys(this.volumes).length);
 	this.volumes[name] = volume;
-	this.renderer.meshes[name] = GL.Mesh.box({sizex: volume.width * volume.widthSpacing, sizey: volume.height * volume.heightSpacing, sizez: volume.depth * volume.depthSpacing, wireframe: true});
+	this.renderer.meshes[name] = GL.Mesh.box({sizex: volume.width * volume.widthSpacing * 0.5, sizey: volume.height * volume.heightSpacing * 0.5, sizez: volume.depth * volume.depthSpacing * 0.5, wireframe: true});
 	this.renderer.textures[name] = volume.getDataTexture();
 }
 
@@ -975,8 +1040,13 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 		volNode.shader = "sh_default";
 	}
 
+	//TODO set dimensions uniform of volume node
+
 	volNode.eye = this.camera.position;
 	volNode.background = this.background;
+
+	var m = this.renderer.meshes[volNode.volume];
+	volNode.dimensions = [m.sizex, m.sizey, m.sizez];
 
 	this.volumeNodes[name] = volNode;
 	this.scene._root.addChild(volNode);
