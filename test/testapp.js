@@ -17,13 +17,20 @@ function init(){
 	var tf = new TransferFunction();
     var tfecontainer = document.getElementById("tfeditor");
     app.tfeditor = new TFEditor({container: tfecontainer});
-	app.tfeditor.tf = tf;
+	app.tfeditor.setTF(tf);
     app.tfeditor.render();
 
     app.volumetrics.addTransferFunction(tf, "mytf");
 }
 
+function draw(){
+    requestAnimationFrame( draw );
+    app.volumetrics.animate();
+    app.tfeditor.render();
+}
+
 init();
+draw();
 
 
 
@@ -39,6 +46,10 @@ function onDicomImage(image){
     var node = new VolumeNode();
     node.volume = "myvol";
     node.tf = "mytf";
+
+    node.steps = 1000;
+    node.stepSize = 1;
+
     app.volumetrics.addVolumeNode(node);
 
     app.tfeditor.histogramBuffer = vol.getHistogram();
