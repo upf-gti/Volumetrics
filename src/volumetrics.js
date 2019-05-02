@@ -783,6 +783,7 @@ Volumetrics = function Volumetrics(options){
 Volumetrics.prototype.init = function(){
 	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
 	this.camera.lookAt( [100,100,100], [0,0,0], [0,1,0] );
+	this.renderer.meshes["camera_screen"] = GL.Mesh.plane({size: 1000});
 
 	//Add default tf
 	var defaultTF = new TransferFunction();
@@ -861,6 +862,89 @@ Volumetrics.prototype.init = function(){
                 cdest = cdest * u_intensity;\n\
                 cdest = u_background * (1.0 - cdest.w) + cdest;\n\
                 color = cdest;\n\
+            }\n\
+        '},
+    "sh_screen": {
+		v: '\
+            #version 300 es\n\
+            precision highp float;\n\
+            in vec3 a_vertex;\n\
+            in vec3 a_normal;\n\
+            in vec2 a_coord;\n\
+            out vec3 v_pos;\n\
+            out vec3 v_normal;\n\
+            out vec2 v_coord;\n\
+            uniform mat4 u_mvp;\n\
+            void main() {\n\
+                v_pos = a_vertex.xyz;\n\
+                v_coord = a_coord;\n\
+                v_normal = a_normal;\n\
+                gl_Position = u_mvp * vec4(a_vertex,1.0);\n\
+            }\n\
+        ',
+		f:  '\
+            #version 300 es\n\
+            precision highp float;\n\
+            precision highp sampler3D;\n\
+            in vec3 v_pos;\n\
+            in vec3 v_normal;\n\
+            in vec2 v_coord;\n\
+            out vec4 color;\n\
+            uniform vec3 u_eye;\n\
+            uniform vec3 u_dimensions;\n\
+            uniform vec4 u_background;\n\
+            uniform sampler2D u_tf_texture;\n\
+            uniform sampler3D u_volume_texture;\n\
+            uniform float u_intensity;\n\
+            uniform float u_stepSize;\n\
+            uniform int u_steps;\n\
+            float sdBox( vec3 p, vec3 b){\n\
+                vec3 d = abs(p) - b;\n\
+                return length(max(d,0.0)) + min(max(d.x,max(d.y,d.z)),0.0);\n\
+            }\n\
+            void main() {\n\
+                vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
+                vec3 raydir = normalize(v_pos - u_eye);\n\
+                vec3 samplepos = v_pos;\n\
+                //Starting point using dist function\n\
+                for(int i=0; i<10; i++){\n\
+                    float dist = sdBox(v_pos, u_dimensions);	//TODO add translation\n\
+                    samplepos = samplepos + (dist*raydir);\n\
+                }\n\
+                raydir = raydir * u_stepSize;\n\
+                \n\
+                //Here we switch to "box coordinates" [-1,1] where 0 is at the center to make computations easier\n\
+                raydir = raydir/u_dimensions;\n\
+                samplepos = samplepos/u_dimensions;		//TODO account for translation\n\
+                \n\
+                //Ray marching loop\n\
+                for(int i=0; i<10000; i++){\n\
+                    if(i > u_steps) break;\n\
+                    vec3 abssamplepos = abs(samplepos);\n\
+                    if(i>1 && abssamplepos.x > 1.0 && abssamplepos.y > 1.0 && abssamplepos.z > 1.0) break;\n\
+                    \n\
+                    /*Interpolation*/\n\
+                    vec3 texsamplepos = (samplepos + vec3(1.0))/2.0;\n\
+                    float f = texture(u_volume_texture, texsamplepos).x;\n\
+                    \n\
+                    /*Classification*/\n\
+                    vec4 csrc = texture( u_tf_texture, vec2(f,0.0) );\n\
+                    \n\
+                    /*Shading and Illumination*/\n\
+                    csrc = vec4(csrc.xyz * csrc.w, csrc.w);\n\
+                    \n\
+                    /*Compositing*/\n\
+                    cdest = csrc * (1.0 - cdest.w) + cdest;\n\
+                    \n\
+                    if(cdest.w >= 1.0) break;\n\
+                    samplepos = samplepos + raydir;\n\
+                }\n\
+                \n\
+                /*Final color*/\n\
+                cdest = cdest * u_intensity;\n\
+                cdest = u_background * (1.0 - cdest.w) + cdest;\n\
+                color = cdest;\n\
+                \n\
             }\n\
         '},
     };
@@ -1030,3 +1114,15 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 	this.volumeNodes[name] = volNode;
 	this.scene._root.addChild(volNode);
 }
+
+Object.defineProperty(Volumetrics.prototype, "background", {
+	get: function() {
+		return this._background;
+	},
+	set: function(b) {
+		this._background = b;
+		for(var v of Object.keys(this.volumeNodes)){
+		this.volumeNodes[v].background = this.background;
+		}
+	},
+});

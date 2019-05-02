@@ -275,8 +275,7 @@ DL.texture3d = function(dicom, callback, options){
 
 DL.dlHeaderElements = 8;
 
-DL.downloadTexture = function(image){
-	console.log("Creating file...");
+DL.getDLAsUint8Array = function(image){
 	var imageView = new Uint8Array(image.imageData);
 	//append dimensions data at the end
 	var headerSize = 4*DL.dlHeaderElements; //4 bytes per number in header
@@ -297,7 +296,14 @@ DL.downloadTexture = function(image){
     view32F[6] = image.columnSpacing;
     view32F[7] = image.sliceSpacing;
 
-	var blob = new Blob([buffer]);
+    return view8;
+}
+
+DL.downloadTexture = function(image){
+	console.log("Creating file...");
+	var view8 = DL.getDLAsUint8Array(image);
+
+	var blob = new Blob([view8]);
     var fakeUrl = URL.createObjectURL(blob);
 	var element = document.createElement("a");
 	element.setAttribute('href', fakeUrl);
