@@ -332,8 +332,9 @@ TransferFunction.prototype.updateTexture = function(){
 TFEditor = function TFEditor(options){
 	options = options || {};
 	options.container = options.container || document.body;
-
-	this.visible = options.visible || true;
+	if(!(options.visible === true || options.visible === false)){
+		options.visible = true;
+	}
 
 	this._top = 10;
 	this._left = 20;
@@ -388,11 +389,20 @@ TFEditor = function TFEditor(options){
 	//TF to edit and histogram to show
 	this.tf = null;
 	this.histogramBuffer = null;
+
+	//Visible at start
+	this.visible = options.visible;
+	if(this.visible){
+		this.show();
+	}else{
+		this.hide();
+	}
 }
 
 TFEditor.prototype.show = function(){
 	this.visible = true;
 	this.TFEdiv.style.display = "block";
+	this.render();
 }
 
 TFEditor.prototype.hide = function(){
@@ -619,6 +629,7 @@ TFEditor.prototype.drawTF = function(){
 
 TFEditor.prototype.render = function(){
 	if(this.visible && this.tf){
+		requestAnimationFrame( this.render.bind(this) );
 		this.drawGraph();
 		this.drawTF();
 	}
@@ -734,16 +745,24 @@ extendClass( VolumeNode, RD.SceneNode );
 /***
  * ==Volumetrics class==
  * Controls scene and renderers
+ *
+ * Useful options: canvas, container, visible, background
  ***/
 Volumetrics = function Volumetrics(options){
 	//WebGL Renderer and scene
 	options = options || {};
+	options.canvas = options.canvas || null;
 	options.container = options.container || document.body;
 	options.version = 2;
 	this.context = GL.create(options);
 	if( this.context.webgl_version != 2 || !this.context ){
 	    alert("WebGL 2.0 not supported by your browser");
 	}
+
+	if(!(options.visible === true || options.visible === false)){
+		options.visible = true;
+	}
+	options.background = options.background || [0.7,0.7,0.9,1];
 
 	this.renderer = new RD.Renderer(this.context);
 	this.scene = new RD.Scene();
@@ -775,9 +794,25 @@ Volumetrics = function Volumetrics(options){
 		
 	};
 
-	this.background = [0.7,0.7,0.9,1];
+	this.background = options.background;
+
+	this.visible = options.visible;
 
 	this.init();
+
+	if(this.visible){
+		this.show();
+	}else{
+		this.hide();
+	}
+}
+
+Volumetrics.prototype.setSize = function(w, h){
+	this.context.canvas.style.width = w;
+	this.context.canvas.style.height = h;
+
+	this.context.canvas.width = w;
+	this.context.canvas.height = h;
 }
 
 Volumetrics.prototype.init = function(){
@@ -1049,11 +1084,27 @@ Volumetrics.prototype.render = function(){
 }
 
 Volumetrics.prototype.animate = function(){
-	this._last = this._now || 0;
-	this._now = getTime();
-	var dt = (this._now - this._last) * 0.001;
-	this.update(dt);
-	this.render();
+	if(this.visible){
+		requestAnimationFrame( this.animate.bind(this) );
+
+		this._last = this._now || 0;
+		this._now = getTime();
+		var dt = (this._now - this._last) * 0.001;
+		this.update(dt);
+		this.render();
+	}
+}
+
+Volumetrics.prototype.show = function(){
+	this.visible = true;
+	this.context.canvas.style.display = "block";
+	this._last = getTime();
+	this.animate();
+}
+
+Volumetrics.prototype.hide = function(){
+	this.visible = false;
+	this.context.canvas.style.display = "none";
 }
 
 Volumetrics.prototype.addVolume = function(volume, name){

@@ -10,27 +10,21 @@ var app = {
 };
 
 function init(){
+    var canvas = document.getElementById("mycanvas");
 	var container = document.getElementById("volumetrics");
-	app.volumetrics = new Volumetrics({container: container});
+	app.volumetrics = new Volumetrics({canvas, canvas, container: container, visible: true, background: [0.3,0.3,0.3,1]});
 	app.volumetrics.animate();
 
 	var tf = new TransferFunction();
     var tfecontainer = document.getElementById("tfeditor");
-    app.tfeditor = new TFEditor({container: tfecontainer});
+    app.tfeditor = new TFEditor({container: tfecontainer, visible: true});
 	app.tfeditor.setTF(tf);
     app.tfeditor.render();
 
     app.volumetrics.addTransferFunction(tf, "mytf");
 }
 
-function draw(){
-    requestAnimationFrame( draw );
-    app.volumetrics.animate();
-    app.tfeditor.render();
-}
-
 init();
-draw();
 
 
 
