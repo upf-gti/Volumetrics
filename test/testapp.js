@@ -10,24 +10,21 @@ var app = {
 };
 
 function init(){
-    var canvas = document.getElementById("mycanvas");
-	var container = document.getElementById("volumetrics");
-	app.volumetrics = new Volumetrics({canvas, canvas, container: container, visible: true, background: [0.3,0.3,0.3,1]});
-	app.volumetrics.animate();
+    //var canvas = document.getElementById("mycanvas");
+	//app.volumetrics = new Volumetrics({canvas: canvas, visible: false, background: [0.3,0.3,0.3,1]});
+
+    var container = document.getElementById("volumetrics");
+    app.volumetrics = new Volumetrics({container: container, visible: true, background: [0.3,0.3,0.3,1]});
 
 	var tf = new TransferFunction();
     var tfecontainer = document.getElementById("tfeditor");
     app.tfeditor = new TFEditor({container: tfecontainer, visible: true});
 	app.tfeditor.setTF(tf);
-    app.tfeditor.render();
 
     app.volumetrics.addTransferFunction(tf, "mytf");
 }
 
 init();
-
-
-
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////

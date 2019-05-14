@@ -342,6 +342,7 @@ TFEditor = function TFEditor(options){
 
 	var rect = options.container.getBoundingClientRect();
 	this._width = rect.width - this._left;
+	if(this._width < 0) this._width = 0;
 	this._r = 6 / 256;
 
 	//Divs
@@ -628,10 +629,12 @@ TFEditor.prototype.drawTF = function(){
 }
 
 TFEditor.prototype.render = function(){
-	if(this.visible && this.tf){
+	if(this.visible){
 		requestAnimationFrame( this.render.bind(this) );
-		this.drawGraph();
-		this.drawTF();
+		if(this.tf){
+			this.drawGraph();
+			this.drawTF();
+		}
 	}
 }
 
@@ -649,11 +652,19 @@ VolumeNode.prototype._ctor = function(){
 	this._volume = null;
 	this._tf = null;
 
-	this.eye = [0,0,0];
 	this.background = [0,0,0,0];
 	this.intensity = 1;
 	this.stepSize = 1;
 	this.steps = 8;
+
+	this.mesh = "proxy_box";
+}
+
+VolumeNode.prototype.render = function(renderer, camera){
+	//Update uniforms depending on Volumetrics
+
+	//Render node
+	renderer.renderNode( this, camera );
 }
 
 Object.defineProperty(VolumeNode.prototype, "volume", {
@@ -663,7 +674,6 @@ Object.defineProperty(VolumeNode.prototype, "volume", {
 	set: function(v) {
 		this._volume = v;
 		this.textures.volume = v;
-		this.mesh = v;
 	},
 });
 
@@ -685,16 +695,14 @@ Object.defineProperty(VolumeNode.prototype, "dimensions", {
 		this.uniforms.u_dimensions = v;
 	},
 });
-
-Object.defineProperty(VolumeNode.prototype, "eye", {
+Object.defineProperty(VolumeNode.prototype, "resolution", {
 	get: function() {
-		return this.uniforms.u_eye;
+		return this.uniforms.u_resolution;
 	},
 	set: function(v) {
-		this.uniforms.u_eye = v;
+		this.uniforms.u_resolution = v;
 	},
 });
-
 Object.defineProperty(VolumeNode.prototype, "background", {
 	get: function() {
 		return this.uniforms.u_background;
@@ -724,7 +732,7 @@ Object.defineProperty(VolumeNode.prototype, "stepSize", {
 
 Object.defineProperty(VolumeNode.prototype, "steps", {
 	get: function() {
-		return this.uniforms.u_eye;
+		return this.uniforms.u_steps;
 	},
 	set: function(v) {
 		this.uniforms.u_steps = v;
@@ -795,16 +803,9 @@ Volumetrics = function Volumetrics(options){
 	};
 
 	this.background = options.background;
-
 	this.visible = options.visible;
 
 	this.init();
-
-	if(this.visible){
-		this.show();
-	}else{
-		this.hide();
-	}
 }
 
 Volumetrics.prototype.setSize = function(w, h){
@@ -815,10 +816,28 @@ Volumetrics.prototype.setSize = function(w, h){
 	this.context.canvas.height = h;
 }
 
+Volumetrics.prototype.initProxyBox = function(){
+	var mesh = GL.Mesh.box({sizex: 1, sizey: 1, sizez: 1, wireframe: true});
+
+	var options = {};
+	var buffers = {};
+	//buffers.vertices = new Float32Array([-1,1,-1,-1,-1,+1,-1,1,1,-1,1,-1,-1,-1,-1,-1,-1,+1,1,1,-1,1,1,1,1,-1,+1,1,1,-1,1,-1,+1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,-1,1,1,-1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,1,-1,-1,1,-1,-1,1,1,1,1,1,-1,-1,-1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,1]);
+	//switch orientation of faces so the front is inside
+	buffers.vertices = new Float32Array([-1,1,-1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,-1,1,-1,1,1,1,-1,1,1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,1,-1,1]);
+	buffers.normals = new Float32Array([-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0]);
+	buffers.coords = new Float32Array([0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0]);
+	buffers.wireframe = new Uint16Array([0,2, 2,5, 5,4, 4,0,   6,7, 7,10, 10,11, 11,6, 0,6, 2,7, 5,10, 4,11  ]);
+	options.bounding = BBox.fromCenterHalfsize( [0,0,0], [1,1,1] );
+
+
+	this.renderer.meshes["proxy_box"] = GL.Mesh.load(buffers, options);
+	
+}
+
 Volumetrics.prototype.init = function(){
 	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
 	this.camera.lookAt( [100,100,100], [0,0,0], [0,1,0] );
-	this.renderer.meshes["camera_screen"] = GL.Mesh.plane({size: 1000});
+	this.initProxyBox();
 
 	//Add default tf
 	var defaultTF = new TransferFunction();
@@ -826,163 +845,130 @@ Volumetrics.prototype.init = function(){
 
 	//Load shaders
 	var volumetricShaderStrings = {
-	"sh_default": {
-		v: '\
-            #version 300 es\n\
-            precision highp float;\n\
-            in vec3 a_vertex;\n\
-            in vec3 a_normal;\n\
-            in vec2 a_coord;\n\
-            out vec3 v_pos;\n\
-            out vec3 v_normal;\n\
-            out vec2 v_coord;\n\
-            uniform mat4 u_mvp;\n\
-            void main() {\n\
-                v_pos = a_vertex.xyz;\n\
-                v_coord = a_coord;\n\
-                v_normal = a_normal;\n\
-                gl_Position = u_mvp * vec4(a_vertex,1.0);\n\
+    "sh_default": {
+    	v: '\
+    	#version 300 es\n\
+        precision highp float;\n\
+        in vec3 a_vertex;\n\
+        in vec3 a_normal;\n\
+        in vec2 a_coord;\n\
+        out vec3 v_pos;\n\
+        out vec3 v_normal;\n\
+        out vec2 v_coord;\n\
+        uniform vec3 u_dimensions;\n\
+        uniform mat4 u_mvp;\n\
+        void main() {\n\
+            v_pos = u_dimensions * a_vertex.xyz;\n\
+            v_coord = a_coord;\n\
+            v_normal = a_normal;\n\
+            gl_Position = u_mvp * vec4(v_pos,1.0);\n\
+        }\n\
+    	',
+    	f: '\
+    	#version 300 es\n\
+        precision highp float;\n\
+        precision highp sampler3D;\n\
+        in vec3 v_pos;\n\
+        in vec3 v_normal;\n\
+        in vec2 v_coord;\n\
+        out vec4 color;\n\
+        uniform vec3 u_eye;\n\
+        uniform vec3 u_dimensions;\n\
+        uniform vec3 u_resolution;\n\
+        uniform vec4 u_background;\n\
+        uniform sampler2D u_tf_texture;\n\
+        uniform sampler3D u_volume_texture;\n\
+        uniform float u_intensity;\n\
+        uniform float u_stepSize;\n\
+        uniform int u_steps;\n\
+        uniform mat4 u_mvp;\n\
+        uniform mat4 u_imvp;\n\
+        \n\
+        /* Return point where the ray enters the box. If the ray originates inside the box it returns the origin. */\n\
+        vec3 rayOrigin(in vec3 ro, in vec3 rd){\n\
+        	if(abs(ro.x) <= 1.0 && abs(ro.y) <= 1.0 && abs(ro.z) <= 1.0) return ro;\n\
+            vec3 ip;\n\
+            vec3 sides;\n\
+            /* Only one these sides can hold the ray origin. The other faces will never hold it */\n\
+            sides = vec3(-sign(rd.x),-sign(rd.y),-sign(rd.z));\n\
+            for(int i=0; i<3; i++){\n\
+                float c = (sides[i] - ro[i]) / rd[i];\n\
+                ip[i] = sides[i];\n\
+                ip[(i+1)%3] = c*rd[(i+1)%3]+ro[(i+1)%3];\n\
+                ip[(i+2)%3] = c*rd[(i+2)%3]+ro[(i+2)%3];\n\
+                if(abs(ip[(i+1)%3]) <= 1.0 && abs(ip[(i+2)%3]) <= 1.0) break;\n\
             }\n\
-        ',
-		f:  '\
-            #version 300 es\n\
-            precision highp float;\n\
-            precision highp sampler3D;\n\
-            in vec3 v_pos;\n\
-            in vec3 v_normal;\n\
-            in vec2 v_coord;\n\
-            out vec4 color;\n\
-            uniform vec3 u_eye;\n\
-            uniform vec3 u_dimensions;\n\
-            uniform vec4 u_background;\n\
-            uniform sampler2D u_tf_texture;\n\
-            uniform sampler3D u_volume_texture;\n\
-            uniform float u_intensity;\n\
-            uniform float u_stepSize;\n\
-            uniform int u_steps;\n\
-            void main() {\n\
-                vec3 raydir = normalize(v_pos - u_eye);\n\
-                vec3 samplepos = v_pos - raydir;\n\
-                vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
-                vec4 csrc;\n\
+            return ip;\n\
+        }\n\
+        \n\
+        /* Better voxel interpolation from www.iquilezles.org/www/articles/texture/texture.htm */\n\
+        vec4 getVoxel( vec3 p ){\n\
+		    p = p*u_resolution + 0.5;\n\
+		    \n\
+		    vec3 i = floor(p);\n\
+		    vec3 f = p - i;\n\
+		    f = f*f*f*(f*(f*6.0-15.0)+10.0);\n\
+		    p = i + f;\n\
+		    \n\
+		    p = (p - 0.5)/u_resolution;\n\
+		    return texture( u_volume_texture, p );\n\
+		}\n\
+        \n\
+        void main() {\n\
+            /* Compute ray origin and direction */\n\
+                vec3 ro = u_eye;\n\
+                vec3 rd = v_pos - ro;\n\
+                vec3 re = v_pos;\n\
                 \n\
-                vec3 otherPoint;\n\
-                float x = u_dimensions.x/2.0;\n\
-                float y = u_dimensions.y/2.0;\n\
-                float z = u_dimensions.z/2.0;\n\
-                raydir = raydir * u_stepSize;\n\
+            /* Transform ray to volume space [-1,1] */\n\
+                ro = ( vec4(ro, 1.0) ).xyz / u_dimensions;\n\
+                rd = ( vec4(rd, 1.0) ).xyz / u_dimensions;\n\
+                re = ( vec4(re, 1.0) ).xyz / u_dimensions;\n\
+                \n\
+            /* Compute ray origin as a point on the volume space */\n\
+                ro = rayOrigin(ro, rd);\n\
+                \n\
+            /* Use raymarching algorithm */\n\
+            	vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
+            	vec3 rs = ro;	//Ray sample\n\
+            	rd = (re-ro)/float(u_steps);	//Ray increment\n\
                 for(int i=0; i<10000; i++){\n\
-                    if(i > u_steps) break;\n\
-                    if(i>0 && (abs(samplepos.x) > x || abs(samplepos.y) > y || abs(samplepos.z) > z)){\n\
-                        break;\n\
-                    }\n\
-                    if(csrc.w >= 1.0) break;\n\
+                	if(i > u_steps) break;\n\
+                	vec3 absrs = abs(rs);\n\
+                    if(i > 1 && absrs.x > 1.0 && absrs.y > 1.0 && absrs.z > 1.0) break;\n\
+					\n\
+					/* Interpolation */\n\
+                    vec3 voxs = (rs + vec3(1.0))/2.0;\n\
+                    float f = getVoxel(voxs).x;\n\
                     \n\
-                    /*Gradient computation (get a normal vector)*/\n\
-                    /*optional*/\n\
-                    /*Interpolation*/\n\
-                    float f = texture(u_volume_texture, samplepos/u_dimensions + vec3(0.5)).x;\n\
-                    \n\
-                    /*Classification*/\n\
-                    csrc = texture( u_tf_texture, vec2(f,0.0) );\n\
-                    \n\
-                    /*Shading and Illumination*/\n\
-                    csrc = vec4(csrc.xyz * csrc.w, csrc.w);\n\
-                    \n\
-                    /*Compositing*/\n\
-                    cdest = csrc * (1.0 - cdest.w) + cdest;\n\
-                    \n\
-                    samplepos = samplepos + raydir;\n\
-                }\n\
-                cdest = cdest * u_intensity;\n\
-                cdest = u_background * (1.0 - cdest.w) + cdest;\n\
-                color = cdest;\n\
-            }\n\
-        '},
-    "sh_screen": {
-		v: '\
-            #version 300 es\n\
-            precision highp float;\n\
-            in vec3 a_vertex;\n\
-            in vec3 a_normal;\n\
-            in vec2 a_coord;\n\
-            out vec3 v_pos;\n\
-            out vec3 v_normal;\n\
-            out vec2 v_coord;\n\
-            uniform mat4 u_mvp;\n\
-            void main() {\n\
-                v_pos = a_vertex.xyz;\n\
-                v_coord = a_coord;\n\
-                v_normal = a_normal;\n\
-                gl_Position = u_mvp * vec4(a_vertex,1.0);\n\
-            }\n\
-        ',
-		f:  '\
-            #version 300 es\n\
-            precision highp float;\n\
-            precision highp sampler3D;\n\
-            in vec3 v_pos;\n\
-            in vec3 v_normal;\n\
-            in vec2 v_coord;\n\
-            out vec4 color;\n\
-            uniform vec3 u_eye;\n\
-            uniform vec3 u_dimensions;\n\
-            uniform vec4 u_background;\n\
-            uniform sampler2D u_tf_texture;\n\
-            uniform sampler3D u_volume_texture;\n\
-            uniform float u_intensity;\n\
-            uniform float u_stepSize;\n\
-            uniform int u_steps;\n\
-            float sdBox( vec3 p, vec3 b){\n\
-                vec3 d = abs(p) - b;\n\
-                return length(max(d,0.0)) + min(max(d.x,max(d.y,d.z)),0.0);\n\
-            }\n\
-            void main() {\n\
-                vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
-                vec3 raydir = normalize(v_pos - u_eye);\n\
-                vec3 samplepos = v_pos;\n\
-                //Starting point using dist function\n\
-                for(int i=0; i<10; i++){\n\
-                    float dist = sdBox(v_pos, u_dimensions);	//TODO add translation\n\
-                    samplepos = samplepos + (dist*raydir);\n\
-                }\n\
-                raydir = raydir * u_stepSize;\n\
-                \n\
-                //Here we switch to "box coordinates" [-1,1] where 0 is at the center to make computations easier\n\
-                raydir = raydir/u_dimensions;\n\
-                samplepos = samplepos/u_dimensions;		//TODO account for translation\n\
-                \n\
-                //Ray marching loop\n\
-                for(int i=0; i<10000; i++){\n\
-                    if(i > u_steps) break;\n\
-                    vec3 abssamplepos = abs(samplepos);\n\
-                    if(i>1 && abssamplepos.x > 1.0 && abssamplepos.y > 1.0 && abssamplepos.z > 1.0) break;\n\
-                    \n\
-                    /*Interpolation*/\n\
-                    vec3 texsamplepos = (samplepos + vec3(1.0))/2.0;\n\
-                    float f = texture(u_volume_texture, texsamplepos).x;\n\
-                    \n\
-                    /*Classification*/\n\
+                    /* Classification */\n\
                     vec4 csrc = texture( u_tf_texture, vec2(f,0.0) );\n\
                     \n\
-                    /*Shading and Illumination*/\n\
+                    /* Shading and Illumination */\n\
                     csrc = vec4(csrc.xyz * csrc.w, csrc.w);\n\
                     \n\
-                    /*Compositing*/\n\
+                    /* Compositing */\n\
                     cdest = csrc * (1.0 - cdest.w) + cdest;\n\
                     \n\
                     if(cdest.w >= 1.0) break;\n\
-                    samplepos = samplepos + raydir;\n\
+                    rs = rs + rd;\n\
+                    \n\
                 }\n\
                 \n\
-                /*Final color*/\n\
-                cdest = cdest * u_intensity;\n\
-                cdest = u_background * (1.0 - cdest.w) + cdest;\n\
-                color = cdest;\n\
+            /* Final color */\n\
+	            cdest = cdest * u_intensity;\n\
+	            cdest = u_background * (1.0 - cdest.w) + cdest;\n\
+	            color = cdest;\n\
                 \n\
+//            /* Debug */\n\
+//                color = vec4(abs(re.x) == 1.0 ? 1.0 : 0.0, abs(re.y) == 1.0 ? 1.0 : 0.0, abs(re.z) == 1.0 ? 1.0 : 0.0, 1.0);\n\
+//                color = vec4(abs(ro.x) == 1.0 ? 1.0 : 0.0, abs(ro.y) == 1.0 ? 1.0 : 0.0, abs(ro.z) == 1.0 ? 1.0 : 0.0, 1.0);\n\
+//                color = vec4(abs(ro.x), abs(ro.y), abs(ro.z), 1.0);\n\
+//                color = 0.1*vec4(distance(ro,re), distance(ro,re), distance(ro,re), 1.0);\n\
+//                \n\
             }\n\
-        '},
-    };
+    	',
+    }};
 
 	for(var s of Object.keys(volumetricShaderStrings)){
 		var shader = new GL.Shader(volumetricShaderStrings[s].v, volumetricShaderStrings[s].f);
@@ -997,6 +983,21 @@ Volumetrics.prototype.init = function(){
 	//Key actions
 	gl.captureKeys();
 	this.renderer.context.onkey = this.onkey.bind(this);
+
+	this.renderer._imvp_matrix = mat4.create();
+
+	//Global shader uniforms
+	this.renderer.setGlobalUniforms({
+		"u_eye": this.camera.position,
+		"u_imvp": this.renderer._imvp_matrix,
+	});
+
+	//Init visibility
+	if(this.visible){
+		this.show();
+	}else{
+		this.hide();
+	}
 }
 
 Volumetrics.prototype.onmousedown = function(e){
@@ -1019,13 +1020,10 @@ Volumetrics.prototype.onkey = function(e){
 }
 
 Volumetrics.prototype.update = function(dt){
+	//Update tfs textures
 	for(var k of Object.keys(this.tfs)){
 		this.tfs[k].update();
-	}
-
-	for(var v of Object.keys(this.volumeNodes)){
-		this.volumeNodes[v].eye = this.camera.position;
-	}
+	}	
 
 	//Update camera
 	if(this.state.focusCamera){
@@ -1069,7 +1067,15 @@ Volumetrics.prototype.update = function(dt){
 		this.camera.position = pos;
 	}
 
+	//Update volume nodes uniforms
+	for(var v of Object.keys(this.volumeNodes)){
+		this.volumeNodes[v].eye = this.camera.position;
+
+	}
+
 	this.scene.update(dt);
+
+	mat4.invert(this.renderer._imvp_matrix, this.renderer._mvp_matrix);
 }
 
 Volumetrics.prototype.render = function(){
@@ -1110,7 +1116,6 @@ Volumetrics.prototype.hide = function(){
 Volumetrics.prototype.addVolume = function(volume, name){
 	name = name || ("volume_" + Object.keys(this.volumes).length);
 	this.volumes[name] = volume;
-	this.renderer.meshes[name] = GL.Mesh.box({sizex: volume.width * volume.widthSpacing * 0.5, sizey: volume.height * volume.heightSpacing * 0.5, sizez: volume.depth * volume.depthSpacing * 0.5, wireframe: true});
 	this.renderer.textures[name] = volume.getDataTexture();
 }
 
@@ -1154,13 +1159,16 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 		volNode.shader = "sh_default";
 	}
 
+	volNode.mesh = "proxy_box";
+
 	//TODO set dimensions uniform of volume node
 
 	volNode.eye = this.camera.position;
 	volNode.background = this.background;
 
-	var m = this.renderer.meshes[volNode.volume];
-	volNode.dimensions = [m.sizex, m.sizey, m.sizez];
+	var v = this.volumes[volNode.volume];
+	volNode.dimensions = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
+	volNode.resolution = [v.width, v.height, v.depth];
 
 	this.volumeNodes[name] = volNode;
 	this.scene._root.addChild(volNode);
