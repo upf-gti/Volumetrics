@@ -28,7 +28,7 @@ init();
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
-// Load 3dTexture
+// Import Dicom and load Volume
 ///////////////////////////////////////////////////////////////////////////////////////////////
 function onDicomImage(image){
     app.image = image;
@@ -38,18 +38,11 @@ function onDicomImage(image){
     node.volume = "myvol";
     node.tf = "mytf";
 
-    node.steps = 1000;
-    node.stepSize = 1;
-
     app.volumetrics.addVolumeNode(node);
 
     app.tfeditor.histogramBuffer = vol.getHistogram();
     app.tfeditor.render();
 };
-
-///////////////////////////////////////////////////////////////////////////////////////////////
-// Import Dicom and load 3dTexture
-///////////////////////////////////////////////////////////////////////////////////////////////
 
 function onDicomLoaded(dicom){
     app.dicom = dicom;
@@ -67,14 +60,35 @@ var folderInput = document.getElementById("folderInput");
 folderInput.addEventListener("change", handleFolderInput, false);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
-// Import custom .dl file
+// Import custom .vl file and .dl file (deprecated, use vl) and load Volume
 ///////////////////////////////////////////////////////////////////////////////////////////////
+
+function onVolume(volume){
+    app.volumetrics.addVolume(volume, "myvol");
+    var node = new VolumeNode();
+    node.volume = "myvol";
+    node.tf = "mytf";
+
+    app.volumetrics.addVolumeNode(node);
+
+    app.tfeditor.histogramBuffer = volume.getHistogram();
+    app.tfeditor.render();
+}
+
+function handleVLInput(event){
+    var file = event.target.files[0];
+    if(file)
+        Volume.loadVLFile(file, onVolume);
+};
+
+var vlInput = document.getElementById("vlInput");
+vlInput.addEventListener("change", handleVLInput, false);
 
 function handleDLInput(event){
     var file = event.target.files[0];
     if(file)
-        DL.loadTextureFile(file, onDicomImage);
+        Volume.loadDLFile(file, onVolume);
 };
 
-var imageInput = document.getElementById("imageInput");
-imageInput.addEventListener("change", handleDLInput, false);
+var dlInput = document.getElementById("dlInput");
+dlInput.addEventListener("change", handleDLInput, false);

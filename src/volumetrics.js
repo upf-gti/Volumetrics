@@ -103,6 +103,12 @@ Volume.prototype.getDataTexture = function(){
 	if(this._dataTexture == null){
 		var format = gl.LUMINANCE;	//TODO compute format depending on channels
 		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, texture_type: GL.TEXTURE_3D, format: format, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE, pixel_data: this._dataView});
+		//litegl does not handle wrap for Z direction - not needed because shader stops outside volume
+		//gl.activeTexture( gl.TEXTURE0 + Texture.MAX_TEXTURE_IMAGE_UNITS - 1);
+		//gl.bindTexture( this._dataTexture.texture_type, this._dataTexture.handler);
+		//gl.texParameteri( this._dataTexture.texture_type, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE );
+		//gl.bindTexture(this._dataTexture.texture_type, null); //disable
+		//gl.activeTexture(gl.TEXTURE0);
 	}
 
 	return this._dataTexture;
@@ -142,6 +148,116 @@ Volume.prototype.getHistogram = function(){
 	}
 
 	return this._histogram;
+}
+
+Volume.prototype.getVolumeAsVLBuffer = function(){
+	var vl1HeaderElements = 9;
+	var headerSize = 4*vl1HeaderElements; //4 bytes per number in header
+
+	var buffer = new ArrayBuffer(this._dataBuffer.byteLength + headerSize);
+
+	var view32 = new Uint32Array(buffer);
+	var view32F = new Float32Array(buffer);
+	view32[0] = 1;
+	view32[1] = this.width;
+	view32[2] = this.height;
+	view32[3] = this.depth;
+	view32F[4] = this.widthSpacing;
+	view32F[5] = this.heightSpacing;
+	view32F[6] = this.depthSpacing;
+	view32[7] = this.channels;
+	view32[8] = this.voxelDepth;
+
+	var view8 = new Uint8Array(buffer);
+    view8.set(this._dataView, headerSize);
+
+    return view8;
+}
+
+Volume.prototype.downloadVL = function(){
+	var view8 = this.getVolumeAsVLBuffer();
+	var blob = new Blob([view8]);
+    var fakeUrl = URL.createObjectURL(blob);
+	var element = document.createElement("a");
+	element.setAttribute('href', fakeUrl);
+	element.setAttribute('download', "texture3d.vl" );
+	element.style.display = 'none';
+	document.body.appendChild(element);
+	element.click();
+	document.body.removeChild(element);
+};
+
+Volume._loadVL1Buffer = function(buffer, view32, view32F){
+	var headerElements = 9;
+	var width = view32[1];
+	var height = view32[2];
+	var depth = view32[3];
+	var widthSpacing = view32F[4];
+	var heightSpacing = view32F[5];
+	var depthSpacing = view32F[6];
+	var channels = view32[7];
+	var voxelDepth = view32[8];
+	var dataBuffer = buffer.slice(4*headerElements);
+	var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, channels: channels, voxelDepth: voxelDepth}, dataBuffer);
+	return volume;
+}
+
+Volume.loadVLBuffer = function(buffer, callback){
+	var view32 = new Uint32Array(buffer);
+	var view32F = new Float32Array(buffer);
+	var version = view32[0];
+	if(version == 1){
+		callback( Volume._loadVL1Buffer(buffer, view32, view32F) );
+	}else{
+		console.log("Version of VL file not supported.")
+	}
+}
+
+Volume.loadVLFile = function(file, callback){
+	var reader = new FileReader();
+
+	reader.onloadend = function(event){
+		if(event.target.readyState === FileReader.DONE){
+	        var buffer = event.target.result;
+	        Volume.loadVLBuffer(buffer, callback);
+	    }
+	}
+
+	reader.readAsArrayBuffer(file);
+};
+
+//Deprecated
+Volume.loadDLBuffer = function(buffer, callback){
+	var view32 = new Uint32Array(buffer);
+	var view32F = new Float32Array(buffer);
+	
+	var headerElements = 8;
+	var width = view32[0];
+	var height = view32[1];
+	var depth = view32[2];
+	var channels = view32[3];
+	var voxelDepth = 8;
+	var widthSpacing = view32F[5];
+	var heightSpacing = view32F[6];
+	var depthSpacing = view32F[7];
+	var dataBuffer = buffer.slice(4*headerElements);
+	
+	var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, channels: channels, voxelDepth: voxelDepth}, dataBuffer);
+	
+	callback( volume );
+}
+
+Volume.loadDLFile = function(file, callback){
+	var reader = new FileReader();
+
+	reader.onloadend = function(event){
+		if(event.target.readyState === FileReader.DONE){
+	        var buffer = event.target.result;
+	        Volume.loadDLBuffer(buffer, callback);
+	    }
+	}
+
+	reader.readAsArrayBuffer(file);
 }
 
 /***
@@ -654,8 +770,8 @@ VolumeNode.prototype._ctor = function(){
 
 	this.background = [0,0,0,0];
 	this.intensity = 1;
-	this.stepSize = 1;
-	this.steps = 8;
+	this.stepSize = 0.01;
+	this.steps = 100;
 
 	this.mesh = "proxy_box";
 }
@@ -844,136 +960,236 @@ Volumetrics.prototype.init = function(){
 	this.addTransferFunction(defaultTF, "tf_default");
 
 	//Load shaders
-	var volumetricShaderStrings = {
-    "sh_default": {
-    	v: '\
-    	#version 300 es\n\
-        precision highp float;\n\
-        in vec3 a_vertex;\n\
-        in vec3 a_normal;\n\
-        in vec2 a_coord;\n\
-        out vec3 v_pos;\n\
-        out vec3 v_normal;\n\
-        out vec2 v_coord;\n\
-        uniform vec3 u_dimensions;\n\
-        uniform mat4 u_mvp;\n\
-        void main() {\n\
-            v_pos = u_dimensions * a_vertex.xyz;\n\
-            v_coord = a_coord;\n\
-            v_normal = a_normal;\n\
-            gl_Position = u_mvp * vec4(v_pos,1.0);\n\
-        }\n\
-    	',
-    	f: '\
-    	#version 300 es\n\
-        precision highp float;\n\
-        precision highp sampler3D;\n\
-        in vec3 v_pos;\n\
-        in vec3 v_normal;\n\
-        in vec2 v_coord;\n\
-        out vec4 color;\n\
-        uniform vec3 u_eye;\n\
-        uniform vec3 u_dimensions;\n\
-        uniform vec3 u_resolution;\n\
-        uniform vec4 u_background;\n\
-        uniform sampler2D u_tf_texture;\n\
-        uniform sampler3D u_volume_texture;\n\
-        uniform float u_intensity;\n\
-        uniform float u_stepSize;\n\
-        uniform int u_steps;\n\
-        uniform mat4 u_mvp;\n\
-        uniform mat4 u_imvp;\n\
+	//TODO move this to server and use Renderer.prototype.loadShaders
+	var shaderstxt = "\\shaders\n\
+sh_default vertex.vs sh_default.fs\n\
+sh_xray vertex.vs sh_xray.fs\n\
+sh_mip vertex.vs sh_mip.fs\n\
+\n\
+\\vertex.vs\n\
+#version 300 es\n\
+precision highp float;\n\
+in vec3 a_vertex;\n\
+in vec3 a_normal;\n\
+in vec2 a_coord;\n\
+out vec3 v_pos;\n\
+out vec3 v_normal;\n\
+out vec2 v_coord;\n\
+uniform vec3 u_dimensions;\n\
+uniform mat4 u_mvp;\n\
+void main() {\n\
+    v_pos = u_dimensions * a_vertex.xyz;\n\
+    v_coord = a_coord;\n\
+    v_normal = a_normal;\n\
+    gl_Position = u_mvp * vec4(v_pos,1.0);\n\
+}\n\
+\n\
+\\fragment_headers_utils\n\
+#version 300 es\n\
+precision highp float;\n\
+precision highp sampler3D;\n\
+in vec3 v_pos;\n\
+in vec3 v_normal;\n\
+in vec2 v_coord;\n\
+out vec4 color;\n\
+uniform vec3 u_eye;\n\
+uniform vec3 u_dimensions;\n\
+uniform vec3 u_resolution;\n\
+uniform vec4 u_background;\n\
+uniform sampler2D u_random_texture;\n\
+uniform sampler2D u_tf_texture;\n\
+uniform sampler3D u_volume_texture;\n\
+uniform float u_intensity;\n\
+uniform float u_stepSize;\n\
+uniform int u_steps;\n\
+uniform mat4 u_mvp;\n\
+uniform mat4 u_imvp;\n\
+\n\
+/* Return point where the ray enters the box. If the ray originates inside the box it returns the origin. */\n\
+vec3 rayOrigin(in vec3 ro, in vec3 rd){\n\
+    if(abs(ro.x) <= 1.0 && abs(ro.y) <= 1.0 && abs(ro.z) <= 1.0) return ro;\n\
+    vec3 ip;\n\
+    vec3 sides;\n\
+    /* Only one these sides can hold the ray origin. The other faces will never hold it */\n\
+    sides = vec3(-sign(rd.x),-sign(rd.y),-sign(rd.z));\n\
+    for(int i=0; i<3; i++){\n\
+        float c = (sides[i] - ro[i]) / rd[i];\n\
+        ip[i] = sides[i];\n\
+        ip[(i+1)%3] = c*rd[(i+1)%3]+ro[(i+1)%3];\n\
+        ip[(i+2)%3] = c*rd[(i+2)%3]+ro[(i+2)%3];\n\
+        if(abs(ip[(i+1)%3]) <= 1.0 && abs(ip[(i+2)%3]) <= 1.0) break;\n\
+    }\n\
+    return ip;\n\
+}\n\
+\n\
+/* Better voxel interpolation from www.iquilezles.org/www/articles/texture/texture.htm */\n\
+vec4 getVoxel( vec3 p ){\n\
+    p = p*u_resolution + 0.5;\n\
+    \n\
+    vec3 i = floor(p);\n\
+    vec3 f = p - i;\n\
+    f = f*f*f*(f*(f*6.0-15.0)+10.0);\n\
+    p = i + f;\n\
+    \n\
+    p = (p - 0.5)/u_resolution;\n\
+    return texture( u_volume_texture, p );\n\
+}\n\
+\n\
+\\fragment_init\n\
+/* Compute ray origin and direction */\n\
+    vec3 ro = u_eye;\n\
+    vec3 rd = v_pos - ro;\n\
+    vec3 re = v_pos;\n\
+    \n\
+/* Transform ray to volume space [-1,1] */\n\
+    ro = ( vec4(ro, 1.0) ).xyz / u_dimensions;\n\
+    rd = ( vec4(rd, 1.0) ).xyz / u_dimensions;\n\
+    re = ( vec4(re, 1.0) ).xyz / u_dimensions;\n\
+    \n\
+/* Compute ray origin as a point on the volume space */\n\
+    ro = rayOrigin(ro, rd);\n\
+\n\
+    vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
+    vec3 rs = ro;   //Ray sample\n\
+    rd = rd * u_stepSize;\n\
+\n\
+\\fragment_postinit_jittering\n\
+    //Introduce an offset in the ray starting position along the ray direction\n\
+    ro = ro; //TODO\n\
+\n\
+\\fragment_interpolation\n\
+    vec3 voxs = (rs + vec3(1.0))/2.0;\n\
+    float f = texture( u_volume_texture, voxs ).x;\n\
+\n\
+\\fragment_interpolation_better\n\
+    vec3 voxs = (rs + vec3(1.0))/2.0;\n\
+    float f = getVoxel(voxs).x;\n\
+\n\
+\\fragment_classification_direct\n\
+    vec4 csrc = vec4(f,f,f,f);\n\
+\n\
+\\fragment_classification_transfer_function\n\
+    vec4 csrc = texture( u_tf_texture, vec2(f,0.0) );\n\
+\n\
+\\fragment_compositing_basic\n\
+    csrc = vec4(csrc.xyz * csrc.w, csrc.w); //transparency\n\
+    cdest = csrc * (1.0 - cdest.w) + cdest; //compositing with previous value\n\
+\n\
+\\fragment_compositing_xray\n\
+    cdest = csrc * (1.0 - cdest.w) + cdest;\n\
+\n\
+\\fragment_compositing_mip\n\
+    if(csrc.w > cdest.w){\n\
+        cdest = csrc;\n\
+    }\n\
+\n\
+\\fragment_debug_exit_point\n\
+    color = vec4(abs(re.x) == 1.0 ? 1.0 : 0.0, abs(re.y) == 1.0 ? 1.0 : 0.0, abs(re.z) == 1.0 ? 1.0 : 0.0, 1.0);\n\
+\n\
+\\fragment_debug_entry_point\n\
+    color = vec4(abs(ro.x) == 1.0 ? 1.0 : 0.0, abs(ro.y) == 1.0 ? 1.0 : 0.0, abs(ro.z) == 1.0 ? 1.0 : 0.0, 1.0);\n\
+\n\
+\\fragment_debug_entry_abs\n\
+    color = vec4(abs(ro.x), abs(ro.y), abs(ro.z), 1.0);\n\
+\n\
+\\fragment_debug_distance_entry_exit\n\
+    color = 0.1*vec4(distance(ro,re), distance(ro,re), distance(ro,re), 1.0);\n\
+\n\
+\\sh_default.fs\n\
+#import \"fragment_headers_utils\"\n\
+\n\
+void main() {\n\
+    #import \"fragment_init\"\n\
         \n\
-        /* Return point where the ray enters the box. If the ray originates inside the box it returns the origin. */\n\
-        vec3 rayOrigin(in vec3 ro, in vec3 rd){\n\
-        	if(abs(ro.x) <= 1.0 && abs(ro.y) <= 1.0 && abs(ro.z) <= 1.0) return ro;\n\
-            vec3 ip;\n\
-            vec3 sides;\n\
-            /* Only one these sides can hold the ray origin. The other faces will never hold it */\n\
-            sides = vec3(-sign(rd.x),-sign(rd.y),-sign(rd.z));\n\
-            for(int i=0; i<3; i++){\n\
-                float c = (sides[i] - ro[i]) / rd[i];\n\
-                ip[i] = sides[i];\n\
-                ip[(i+1)%3] = c*rd[(i+1)%3]+ro[(i+1)%3];\n\
-                ip[(i+2)%3] = c*rd[(i+2)%3]+ro[(i+2)%3];\n\
-                if(abs(ip[(i+1)%3]) <= 1.0 && abs(ip[(i+2)%3]) <= 1.0) break;\n\
-            }\n\
-            return ip;\n\
-        }\n\
+    /* Use raymarching algorithm */\n\
+    for(int i=0; i<10000; i++){\n\
+        if(i > u_steps) break;\n\
+        vec3 absrs = abs(rs);\n\
+        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;\n\
+		\n\
+		/* Interpolation */\n\
+        #import \"fragment_interpolation\"\n\
         \n\
-        /* Better voxel interpolation from www.iquilezles.org/www/articles/texture/texture.htm */\n\
-        vec4 getVoxel( vec3 p ){\n\
-		    p = p*u_resolution + 0.5;\n\
-		    \n\
-		    vec3 i = floor(p);\n\
-		    vec3 f = p - i;\n\
-		    f = f*f*f*(f*(f*6.0-15.0)+10.0);\n\
-		    p = i + f;\n\
-		    \n\
-		    p = (p - 0.5)/u_resolution;\n\
-		    return texture( u_volume_texture, p );\n\
-		}\n\
+        /* Classification */\n\
+        #import \"fragment_classification_transfer_function\"\n\
         \n\
-        void main() {\n\
-            /* Compute ray origin and direction */\n\
-                vec3 ro = u_eye;\n\
-                vec3 rd = v_pos - ro;\n\
-                vec3 re = v_pos;\n\
-                \n\
-            /* Transform ray to volume space [-1,1] */\n\
-                ro = ( vec4(ro, 1.0) ).xyz / u_dimensions;\n\
-                rd = ( vec4(rd, 1.0) ).xyz / u_dimensions;\n\
-                re = ( vec4(re, 1.0) ).xyz / u_dimensions;\n\
-                \n\
-            /* Compute ray origin as a point on the volume space */\n\
-                ro = rayOrigin(ro, rd);\n\
-                \n\
-            /* Use raymarching algorithm */\n\
-            	vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
-            	vec3 rs = ro;	//Ray sample\n\
-            	rd = (re-ro)/float(u_steps);	//Ray increment\n\
-                for(int i=0; i<10000; i++){\n\
-                	if(i > u_steps) break;\n\
-                	vec3 absrs = abs(rs);\n\
-                    if(i > 1 && absrs.x > 1.0 && absrs.y > 1.0 && absrs.z > 1.0) break;\n\
-					\n\
-					/* Interpolation */\n\
-                    vec3 voxs = (rs + vec3(1.0))/2.0;\n\
-                    float f = getVoxel(voxs).x;\n\
-                    \n\
-                    /* Classification */\n\
-                    vec4 csrc = texture( u_tf_texture, vec2(f,0.0) );\n\
-                    \n\
-                    /* Shading and Illumination */\n\
-                    csrc = vec4(csrc.xyz * csrc.w, csrc.w);\n\
-                    \n\
-                    /* Compositing */\n\
-                    cdest = csrc * (1.0 - cdest.w) + cdest;\n\
-                    \n\
-                    if(cdest.w >= 1.0) break;\n\
-                    rs = rs + rd;\n\
-                    \n\
-                }\n\
-                \n\
-            /* Final color */\n\
-	            cdest = cdest * u_intensity;\n\
-	            cdest = u_background * (1.0 - cdest.w) + cdest;\n\
-	            color = cdest;\n\
-                \n\
-//            /* Debug */\n\
-//                color = vec4(abs(re.x) == 1.0 ? 1.0 : 0.0, abs(re.y) == 1.0 ? 1.0 : 0.0, abs(re.z) == 1.0 ? 1.0 : 0.0, 1.0);\n\
-//                color = vec4(abs(ro.x) == 1.0 ? 1.0 : 0.0, abs(ro.y) == 1.0 ? 1.0 : 0.0, abs(ro.z) == 1.0 ? 1.0 : 0.0, 1.0);\n\
-//                color = vec4(abs(ro.x), abs(ro.y), abs(ro.z), 1.0);\n\
-//                color = 0.1*vec4(distance(ro,re), distance(ro,re), distance(ro,re), 1.0);\n\
-//                \n\
-            }\n\
-    	',
-    }};
-
-	for(var s of Object.keys(volumetricShaderStrings)){
-		var shader = new GL.Shader(volumetricShaderStrings[s].v, volumetricShaderStrings[s].f);
-		this.renderer.shaders[s] = shader;
-	}
+        /* Compositing */\n\
+        #import \"fragment_compositing_basic\"\n\
+        \n\
+        if(cdest.w >= 1.0) break;\n\
+        rs = rs + rd;\n\
+    }\n\
+        \n\
+    /* Final color */\n\
+    cdest = cdest * u_intensity;\n\
+    cdest = u_background * (1.0 - cdest.w) + cdest;\n\
+    color = cdest;       \n\
+}\n\
+\n\
+\\sh_xray.fs\n\
+#import \"fragment_headers_utils\"\n\
+\n\
+void main() {\n\
+    #import \"fragment_init\"\n\
+        \n\
+    /* Use raymarching algorithm */\n\
+    for(int i=0; i<10000; i++){\n\
+        if(i > u_steps) break;\n\
+        vec3 absrs = abs(rs);\n\
+        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;\n\
+        \n\
+        /* Interpolation */\n\
+        #import \"fragment_interpolation\"\n\
+        \n\
+        /* Classification */\n\
+        #import \"fragment_classification_transfer_function\"\n\
+        \n\
+        /* Compositing */\n\
+        #import \"fragment_compositing_xray\"\n\
+        \n\
+        if(cdest.w >= 1.0) break;\n\
+        rs = rs + rd;\n\
+    }\n\
+        \n\
+    /* Final color */\n\
+    cdest = cdest * u_intensity;\n\
+    cdest = u_background * (1.0 - cdest.w) + cdest;\n\
+    color = cdest;       \n\
+}\n\
+\n\
+\\sh_mip.fs\n\
+#import \"fragment_headers_utils\"\n\
+\n\
+void main() {\n\
+    #import \"fragment_init\"\n\
+        \n\
+    /* Use raymarching algorithm */\n\
+    for(int i=0; i<10000; i++){\n\
+        if(i > u_steps) break;\n\
+        vec3 absrs = abs(rs);\n\
+        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;\n\
+        \n\
+        /* Interpolation */\n\
+        #import \"fragment_interpolation\"\n\
+        \n\
+        /* Classification */\n\
+        #import \"fragment_classification_transfer_function\"\n\
+        \n\
+        /* Compositing */\n\
+        #import \"fragment_compositing_mip\"\n\
+        \n\
+        if(cdest.w >= 1.0) break;\n\
+        rs = rs + rd;\n\
+    }\n\
+        \n\
+    /* Final color */\n\
+    cdest = cdest * u_intensity;\n\
+    cdest = u_background * (1.0 - cdest.w) + cdest;\n\
+    color = cdest;       \n\
+}\n\
+";
+	var atlas = GL.processFileAtlas(shaderstxt);
+	this.renderer.compileShadersFromAtlas(atlas);
 
 	//Mouse actions
 	gl.captureMouse();
