@@ -771,9 +771,9 @@ VolumeNode.prototype._ctor = function(){
 	this.background = [0,0,0,0];
 	this.intensity = 1;
 	this.stepSize = 0.01;
-	this.steps = 100;
 
 	this.mesh = "proxy_box";
+	this.textures.jittering = "_jittering";
 }
 
 VolumeNode.prototype.render = function(renderer, camera){
@@ -846,15 +846,6 @@ Object.defineProperty(VolumeNode.prototype, "stepSize", {
 	},
 });
 
-Object.defineProperty(VolumeNode.prototype, "steps", {
-	get: function() {
-		return this.uniforms.u_steps;
-	},
-	set: function(v) {
-		this.uniforms.u_steps = v;
-	},
-});
-
 VolumeNode.prototype.hide = function(){
 	this.flags.visible = false;
 }
@@ -875,7 +866,7 @@ extendClass( VolumeNode, RD.SceneNode );
 Volumetrics = function Volumetrics(options){
 	//WebGL Renderer and scene
 	options = options || {};
-	options.canvas = options.canvas || null;
+	//options.canvas = options.canvas || null;
 	options.container = options.container || document.body;
 	options.version = 2;
 	this.context = GL.create(options);
@@ -887,6 +878,8 @@ Volumetrics = function Volumetrics(options){
 		options.visible = true;
 	}
 	options.background = options.background || [0.7,0.7,0.9,1];
+
+	this.container = options.container;
 
 	this.renderer = new RD.Renderer(this.context);
 	this.scene = new RD.Scene();
@@ -950,18 +943,10 @@ Volumetrics.prototype.initProxyBox = function(){
 	
 }
 
-Volumetrics.prototype.init = function(){
-	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
-	this.camera.lookAt( [100,100,100], [0,0,0], [0,1,0] );
-	this.initProxyBox();
-
-	//Add default tf
-	var defaultTF = new TransferFunction();
-	this.addTransferFunction(defaultTF, "tf_default");
-
-	//Load shaders
+Volumetrics.prototype.reloadShaders = function(){
 	//TODO move this to server and use Renderer.prototype.loadShaders
-	var shaderstxt = "\\shaders\n\
+	var shaderstxt = "\n\
+\\shaders\n\
 sh_default vertex.vs sh_default.fs\n\
 sh_xray vertex.vs sh_xray.fs\n\
 sh_mip vertex.vs sh_mip.fs\n\
@@ -996,12 +981,11 @@ uniform vec3 u_eye;\n\
 uniform vec3 u_dimensions;\n\
 uniform vec3 u_resolution;\n\
 uniform vec4 u_background;\n\
-uniform sampler2D u_random_texture;\n\
+uniform sampler2D u_jittering_texture;\n\
 uniform sampler2D u_tf_texture;\n\
 uniform sampler3D u_volume_texture;\n\
 uniform float u_intensity;\n\
 uniform float u_stepSize;\n\
-uniform int u_steps;\n\
 uniform mat4 u_mvp;\n\
 uniform mat4 u_imvp;\n\
 \n\
@@ -1035,6 +1019,10 @@ vec4 getVoxel( vec3 p ){\n\
     return texture( u_volume_texture, p );\n\
 }\n\
 \n\
+float jitteringFactor( vec2 p ){\n\
+    return texture(u_jittering_texture, p.xy/128.0).x;\n\
+}\n\
+\n\
 \\fragment_init\n\
 /* Compute ray origin and direction */\n\
     vec3 ro = u_eye;\n\
@@ -1051,11 +1039,11 @@ vec4 getVoxel( vec3 p ){\n\
 \n\
     vec4 cdest = vec4(0.0,0.0,0.0,0.0);\n\
     vec3 rs = ro;   //Ray sample\n\
-    rd = rd * u_stepSize;\n\
+    rd = normalize(rd) * u_stepSize;\n\
 \n\
 \\fragment_postinit_jittering\n\
     //Introduce an offset in the ray starting position along the ray direction\n\
-    ro = ro; //TODO\n\
+    ro = ro - rd*jitteringFactor(gl_FragCoord.xy);\n\
 \n\
 \\fragment_interpolation\n\
     vec3 voxs = (rs + vec3(1.0))/2.0;\n\
@@ -1095,20 +1083,26 @@ vec4 getVoxel( vec3 p ){\n\
 \\fragment_debug_distance_entry_exit\n\
     color = 0.1*vec4(distance(ro,re), distance(ro,re), distance(ro,re), 1.0);\n\
 \n\
+\\fragment_debug_position_entry\n\
+    color = vec4(abs(ro).xyz, 1.0);\n\
+\n\
+\\fragment_debug_jittering_intensity\n\
+    color = vec4(jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), 1.0);\n\
+\n\
 \\sh_default.fs\n\
 #import \"fragment_headers_utils\"\n\
 \n\
 void main() {\n\
     #import \"fragment_init\"\n\
+    #import \"fragment_postinit_jittering\"\n\
         \n\
     /* Use raymarching algorithm */\n\
-    for(int i=0; i<10000; i++){\n\
-        if(i > u_steps) break;\n\
+    for(int i=0; i<100000; i++){\n\
         vec3 absrs = abs(rs);\n\
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;\n\
 		\n\
 		/* Interpolation */\n\
-        #import \"fragment_interpolation\"\n\
+        #import \"fragment_interpolation_better\"\n\
         \n\
         /* Classification */\n\
         #import \"fragment_classification_transfer_function\"\n\
@@ -1123,7 +1117,7 @@ void main() {\n\
     /* Final color */\n\
     cdest = cdest * u_intensity;\n\
     cdest = u_background * (1.0 - cdest.w) + cdest;\n\
-    color = cdest;       \n\
+    color = cdest;\n\
 }\n\
 \n\
 \\sh_xray.fs\n\
@@ -1133,13 +1127,12 @@ void main() {\n\
     #import \"fragment_init\"\n\
         \n\
     /* Use raymarching algorithm */\n\
-    for(int i=0; i<10000; i++){\n\
-        if(i > u_steps) break;\n\
+    for(int i=0; i<100000; i++){\n\
         vec3 absrs = abs(rs);\n\
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;\n\
         \n\
         /* Interpolation */\n\
-        #import \"fragment_interpolation\"\n\
+        #import \"fragment_interpolation_better\"\n\
         \n\
         /* Classification */\n\
         #import \"fragment_classification_transfer_function\"\n\
@@ -1154,7 +1147,7 @@ void main() {\n\
     /* Final color */\n\
     cdest = cdest * u_intensity;\n\
     cdest = u_background * (1.0 - cdest.w) + cdest;\n\
-    color = cdest;       \n\
+    color = cdest;\n\
 }\n\
 \n\
 \\sh_mip.fs\n\
@@ -1164,13 +1157,12 @@ void main() {\n\
     #import \"fragment_init\"\n\
         \n\
     /* Use raymarching algorithm */\n\
-    for(int i=0; i<10000; i++){\n\
-        if(i > u_steps) break;\n\
+    for(int i=0; i<100000; i++){\n\
         vec3 absrs = abs(rs);\n\
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;\n\
         \n\
         /* Interpolation */\n\
-        #import \"fragment_interpolation\"\n\
+        #import \"fragment_interpolation_better\"\n\
         \n\
         /* Classification */\n\
         #import \"fragment_classification_transfer_function\"\n\
@@ -1185,11 +1177,37 @@ void main() {\n\
     /* Final color */\n\
     cdest = cdest * u_intensity;\n\
     cdest = u_background * (1.0 - cdest.w) + cdest;\n\
-    color = cdest;       \n\
+    color = cdest;\n\
 }\n\
 ";
+
 	var atlas = GL.processFileAtlas(shaderstxt);
 	this.renderer.compileShadersFromAtlas(atlas);
+}
+
+Volumetrics.prototype.createJitteringTexture = function(x, y){
+	var view = new Uint8Array(x*y);
+
+	for(var i=0; i<x*y; i++){
+		view[i] = Math.floor( 255*Math.random() );
+	}
+
+	var texture = new GL.Texture(x, y, {texture_type: GL.TEXTURE_2D, format: gl.LUMINANCE, magFilter: gl.NEAREST, wrap: gl.REPEAT, pixel_data: view});
+	this.renderer.textures._jittering = texture;
+}
+
+Volumetrics.prototype.init = function(){
+	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
+	this.camera.lookAt( [100,100,100], [0,0,0], [0,1,0] );
+	this.initProxyBox();
+
+	//Add default tf
+	var defaultTF = new TransferFunction();
+	this.addTransferFunction(defaultTF, "tf_default");
+
+	//Load shaders
+	this.reloadShaders();
+	this.createJitteringTexture(128,128);
 
 	//Mouse actions
 	gl.captureMouse();
