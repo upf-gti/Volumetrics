@@ -1184,7 +1184,7 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 
 	var v = this.volumes[volNode.volume];
 	volNode.dimensions = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
-	//volNode.scaling = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
+	volNode.scaling = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
 	volNode.resolution = [v.width, v.height, v.depth];
 
 	this.volumeNodes[name] = volNode;

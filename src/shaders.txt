@@ -14,10 +14,9 @@ in vec2 a_coord;
 out vec3 v_pos;
 out vec3 v_normal;
 out vec2 v_coord;
-uniform vec3 u_dimensions;
 uniform mat4 u_mvp;
 void main() {
-    v_pos = u_dimensions * a_vertex.xyz;
+    v_pos = a_vertex.xyz;
     v_coord = a_coord;
     v_normal = a_normal;
     gl_Position = u_mvp * vec4(v_pos,1.0);
@@ -82,12 +81,12 @@ float jitteringFactor( vec2 p ){
 /* Compute ray origin and direction */
     vec3 ro = u_eye - u_position;
     vec3 re = v_pos;
-    vec3 rd = re - ro;
     
 /* Transform ray to volume space [-1,1] */
-    ro = ro / u_dimensions;
-    rd = rd / u_dimensions;
-    re = re / u_dimensions;
+    ro = ro / u_dimensions; //equivalent to multiply to inverse model???
+    re = re;
+
+    vec3 rd = re - ro;
     
 /* Compute ray origin as a point on the volume space */
     ro = rayOrigin(ro, rd);
