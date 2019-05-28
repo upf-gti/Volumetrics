@@ -73,7 +73,7 @@ function onVolume(volume){
 
     app.tfeditor.histogramBuffer = volume.getHistogram();
     app.tfeditor.render();
-}
+};
 
 function handleVLInput(event){
     var file = event.target.files[0];
@@ -84,11 +84,16 @@ function handleVLInput(event){
 var vlInput = document.getElementById("vlInput");
 vlInput.addEventListener("change", handleVLInput, false);
 
-function handleDLInput(event){
-    var file = event.target.files[0];
-    if(file)
-        Volume.loadDLFile(file, onVolume);
+function downloadVLExample(){
+    console.log("Downloading example.");
+    fetch("https://webglstudio.org/users/mfloriach/volumetrics/demo/texture3d.vl")
+        .then(function(response) {
+            return response.arrayBuffer();
+        })
+        .then(function(buffer) {
+            console.log("Example downloaded.");
+            Volume.loadVLBuffer(buffer, onVolume);
+        });
 };
-
-var dlInput = document.getElementById("dlInput");
-dlInput.addEventListener("change", handleDLInput, false);
+var vlExampleButton = document.getElementById("vlExample");
+vlExampleButton.addEventListener("click", downloadVLExample);

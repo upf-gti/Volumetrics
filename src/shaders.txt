@@ -1,7 +1,9 @@
 \shaders
-sh_default vertex.vs sh_default.fs
-sh_xray vertex.vs sh_xray.fs
-sh_mip vertex.vs sh_mip.fs
+volumetric_default vertex.vs volumetric_default.fs
+volumetric_xray vertex.vs volumetric_xray.fs
+volumetric_mip vertex.vs volumetric_mip.fs
+debug_volumetric_jittering vertex.vs debug_volumetric_jittering.fs
+volumetric_depth vertex.vs volumetric_depth.fs
 
 \vertex.vs
 #version 300 es
@@ -30,6 +32,7 @@ in vec3 v_normal;
 in vec2 v_coord;
 out vec4 color;
 uniform vec3 u_eye;
+uniform vec3 u_position;
 uniform vec3 u_dimensions;
 uniform vec3 u_resolution;
 uniform vec4 u_background;
@@ -37,7 +40,7 @@ uniform sampler2D u_jittering_texture;
 uniform sampler2D u_tf_texture;
 uniform sampler3D u_volume_texture;
 uniform float u_intensity;
-uniform float u_stepSize;
+uniform float u_levelOfDetail;
 uniform mat4 u_mvp;
 uniform mat4 u_imvp;
 
@@ -77,21 +80,21 @@ float jitteringFactor( vec2 p ){
 
 \fragment_init
 /* Compute ray origin and direction */
-    vec3 ro = u_eye;
-    vec3 rd = v_pos - ro;
+    vec3 ro = u_eye - u_position;
     vec3 re = v_pos;
+    vec3 rd = re - ro;
     
 /* Transform ray to volume space [-1,1] */
-    ro = ( vec4(ro, 1.0) ).xyz / u_dimensions;
-    rd = ( vec4(rd, 1.0) ).xyz / u_dimensions;
-    re = ( vec4(re, 1.0) ).xyz / u_dimensions;
+    ro = ro / u_dimensions;
+    rd = rd / u_dimensions;
+    re = re / u_dimensions;
     
 /* Compute ray origin as a point on the volume space */
     ro = rayOrigin(ro, rd);
 
     vec4 cdest = vec4(0.0,0.0,0.0,0.0);
     vec3 rs = ro;   //Ray sample
-    rd = normalize(rd) * u_stepSize;
+    rd = normalize(rd) * (1.0/ u_levelOfDetail);
 
 \fragment_postinit_jittering
     //Introduce an offset in the ray starting position along the ray direction
@@ -112,7 +115,7 @@ float jitteringFactor( vec2 p ){
     vec4 csrc = texture( u_tf_texture, vec2(f,0.0) );
 
 \fragment_compositing_basic
-    csrc = vec4(csrc.xyz * csrc.w, csrc.w); //transparency
+    csrc = vec4(csrc.xyz * csrc.w, csrc.w); //transparency, applied this way to avoid color bleeding
     cdest = csrc * (1.0 - cdest.w) + cdest; //compositing with previous value
 
 \fragment_compositing_xray
@@ -141,7 +144,7 @@ float jitteringFactor( vec2 p ){
 \fragment_debug_jittering_intensity
     color = vec4(jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), 1.0);
 
-\sh_default.fs
+\volumetric_default.fs
 #import "fragment_headers_utils"
 
 void main() {
@@ -168,11 +171,12 @@ void main() {
         
     /* Final color */
     cdest = cdest * u_intensity;
+    if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
     color = cdest;
 }
 
-\sh_xray.fs
+\volumetric_xray.fs
 #import "fragment_headers_utils"
 
 void main() {
@@ -198,11 +202,12 @@ void main() {
         
     /* Final color */
     cdest = cdest * u_intensity;
+    if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
     color = cdest;
 }
 
-\sh_mip.fs
+\volumetric_mip.fs
 #import "fragment_headers_utils"
 
 void main() {
@@ -228,6 +233,50 @@ void main() {
         
     /* Final color */
     cdest = cdest * u_intensity;
+    if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
     color = cdest;
+}
+
+\volumetric_depth.fs
+#import "fragment_headers_utils"
+
+void main() {
+    #import "fragment_init"
+    #import "fragment_postinit_jittering"
+        
+    /* Use raymarching algorithm */
+    for(int i=0; i<100000; i++){
+        vec3 absrs = abs(rs);
+        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
+        
+        /* Interpolation */
+        #import "fragment_interpolation_better"
+        
+        /* Classification */
+        #import "fragment_classification_transfer_function"
+
+        /* Compute depth in clip space */
+        cdest = csrc;
+        gl_FragDepth = ( vec4(rs, 1.0) * u_mvp ).z;
+        if(cdest.w >= 0.1){
+            break;
+        };
+        rs = rs + rd;
+    }
+
+    /* Final color */
+    cdest = cdest * u_intensity;
+    if(cdest.w < 0.1) discard;
+    color = vec4( vec3( (gl_FragDepth + 1.0) / 2.0 ), 1.0);
+}
+
+\debug_volumetric_jittering.fs
+#import "fragment_headers_utils"
+
+void main() {
+    #import "fragment_init"
+    #import "fragment_postinit_jittering"
+    #import "fragment_debug_position_entry"
+    color = color * u_intensity;
 }
