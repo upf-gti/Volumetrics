@@ -2,8 +2,10 @@
 volumetric_default vertex.vs volumetric_default.fs
 volumetric_xray vertex.vs volumetric_xray.fs
 volumetric_mip vertex.vs volumetric_mip.fs
+volumetric_picking vertex.vs volumetric_picking.fs
 debug_volumetric_jittering vertex.vs debug_volumetric_jittering.fs
-volumetric_depth vertex.vs volumetric_depth.fs
+debug_volumetric_depth vertex.vs debug_volumetric_depth.fs
+debug_surface_depth vertex.vs debug_surface_depth.fs
 
 \vertex.vs
 #version 300 es
@@ -30,9 +32,8 @@ in vec3 v_pos;
 in vec3 v_normal;
 in vec2 v_coord;
 out vec4 color;
-uniform vec3 u_eye;
+uniform vec3 u_camera_position;
 uniform vec3 u_position;
-uniform vec3 u_dimensions;
 uniform vec3 u_resolution;
 uniform vec4 u_background;
 uniform sampler2D u_jittering_texture;
@@ -40,15 +41,16 @@ uniform sampler2D u_tf_texture;
 uniform sampler3D u_volume_texture;
 uniform float u_intensity;
 uniform float u_levelOfDetail;
+uniform float u_isosurfaceLevel;
 uniform mat4 u_mvp;
-uniform mat4 u_imvp;
+uniform mat4 u_im;
 
-/* Return point where the ray enters the box. If the ray originates inside the box it returns the origin. */
+// Return point where the ray enters the box. If the ray originates inside the box it returns the origin.
 vec3 rayOrigin(in vec3 ro, in vec3 rd){
     if(abs(ro.x) <= 1.0 && abs(ro.y) <= 1.0 && abs(ro.z) <= 1.0) return ro;
     vec3 ip;
     vec3 sides;
-    /* Only one these sides can hold the ray origin. The other faces will never hold it */
+    // Only one these sides can hold the ray origin. The other faces will never hold it
     sides = vec3(-sign(rd.x),-sign(rd.y),-sign(rd.z));
     for(int i=0; i<3; i++){
         float c = (sides[i] - ro[i]) / rd[i];
@@ -60,7 +62,7 @@ vec3 rayOrigin(in vec3 ro, in vec3 rd){
     return ip;
 }
 
-/* Better voxel interpolation from www.iquilezles.org/www/articles/texture/texture.htm */
+// Better voxel interpolation from www.iquilezles.org/www/articles/texture/texture.htm
 vec4 getVoxel( in vec3 p ){
     p = p*u_resolution + 0.5;
     
@@ -77,23 +79,24 @@ float jitteringFactor( vec2 p ){
     return texture(u_jittering_texture, p.xy/100.0).x;
 }
 
-\fragment_init
-/* Compute ray origin and direction */
-    vec3 ro = u_eye - u_position;
-    vec3 re = v_pos;
-    
-/* Transform ray to volume space [-1,1] */
-    ro = ro / u_dimensions; //equivalent to multiply to inverse model???
-    re = re;
+float pointDepth( in vec3 p ){
+    vec4 homogeneous_p = u_mvp * vec4(p, 1.0);
+    return 1.0 - homogeneous_p.z / homogeneous_p.w;
+}
 
+\fragment_init 
+// Compute ray origin and direction in volume space [-1,1]
+    vec4 homogeneous_ro = u_im * vec4(u_camera_position, 1.0);
+    vec3 ro = homogeneous_ro.xyz / homogeneous_ro.w;
+    vec3 re = v_pos;
     vec3 rd = re - ro;
     
-/* Compute ray origin as a point on the volume space */
+// Compute ray origin as a point on the volume space
     ro = rayOrigin(ro, rd);
 
     vec4 cdest = vec4(0.0,0.0,0.0,0.0);
     vec3 rs = ro;   //Ray sample
-    rd = normalize(rd) * (1.0/ u_levelOfDetail);
+    rd = normalize(rd) * (1.0 / u_levelOfDetail);
 
 \fragment_postinit_jittering
     //Introduce an offset in the ray starting position along the ray direction
@@ -125,6 +128,15 @@ float jitteringFactor( vec2 p ){
         cdest = csrc;
     }
 
+\fragment_volume_depth_init
+    int depthAssigned = 0;
+
+\fragment_volume_depth
+    if(csrc.w >= u_isosurfaceLevel && depthAssigned == 0 ){
+        depthAssigned = 1;
+        //gl_FragDepth = pointDepth(rs);
+    }
+
 \fragment_debug_exit_point
     color = vec4(abs(re.x) == 1.0 ? 1.0 : 0.0, abs(re.y) == 1.0 ? 1.0 : 0.0, abs(re.z) == 1.0 ? 1.0 : 0.0, 1.0);
 
@@ -147,28 +159,32 @@ float jitteringFactor( vec2 p ){
 #import "fragment_headers_utils"
 
 void main() {
+    #import "fragment_volume_depth_init"
     #import "fragment_init"
     #import "fragment_postinit_jittering"
         
-    /* Use raymarching algorithm */
+    // Use raymarching algorithm
     for(int i=0; i<100000; i++){
         vec3 absrs = abs(rs);
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
 		
-		/* Interpolation */
+		// Interpolation
         #import "fragment_interpolation_better"
         
-        /* Classification */
+        // Classification
         #import "fragment_classification_transfer_function"
         
-        /* Compositing */
+        // Compositing
         #import "fragment_compositing_basic"
+
+        // Set volume depth if main isosurface level is reached
+        #import "fragment_volume_depth"
         
         if(cdest.w >= 1.0) break;
         rs = rs + rd;
     }
         
-    /* Final color */
+    // Final color
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
@@ -179,27 +195,31 @@ void main() {
 #import "fragment_headers_utils"
 
 void main() {
+    #import "fragment_volume_depth_init"
     #import "fragment_init"
         
-    /* Use raymarching algorithm */
+    // Use raymarching algorithm
     for(int i=0; i<100000; i++){
         vec3 absrs = abs(rs);
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
         
-        /* Interpolation */
+        // Interpolation
         #import "fragment_interpolation_better"
         
-        /* Classification */
+        // Classification
         #import "fragment_classification_transfer_function"
         
-        /* Compositing */
+        // Compositing
         #import "fragment_compositing_xray"
         
+        // Set volume depth if main isosurface level is reached
+        #import "fragment_volume_depth"
+
         if(cdest.w >= 1.0) break;
         rs = rs + rd;
     }
         
-    /* Final color */
+    // Final color
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
@@ -210,64 +230,73 @@ void main() {
 #import "fragment_headers_utils"
 
 void main() {
+    #import "fragment_volume_depth_init"
     #import "fragment_init"
         
-    /* Use raymarching algorithm */
+    // Use raymarching algorithm
     for(int i=0; i<100000; i++){
         vec3 absrs = abs(rs);
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
         
-        /* Interpolation */
+        // Interpolation
         #import "fragment_interpolation_better"
         
-        /* Classification */
+        // Classification
         #import "fragment_classification_transfer_function"
         
-        /* Compositing */
+        // Compositing
         #import "fragment_compositing_mip"
+
+        // Set volume depth if main isosurface level is reached
+        #import "fragment_volume_depth"
         
         if(cdest.w >= 1.0) break;
         rs = rs + rd;
     }
         
-    /* Final color */
+    // Final color
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
     color = cdest;
 }
 
-\volumetric_depth.fs
+\volumetric_picking.fs
 #import "fragment_headers_utils"
 
 void main() {
+    #import "fragment_volume_depth_init"
     #import "fragment_init"
     #import "fragment_postinit_jittering"
-        
-    /* Use raymarching algorithm */
+
+    // Use raymarching algorithm
     for(int i=0; i<100000; i++){
         vec3 absrs = abs(rs);
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
         
-        /* Interpolation */
+        // Interpolation
         #import "fragment_interpolation_better"
         
-        /* Classification */
+        // Classification
         #import "fragment_classification_transfer_function"
 
-        /* Compute depth in clip space */
         cdest = csrc;
-        gl_FragDepth = ( vec4(rs, 1.0) * u_mvp ).z;
-        if(cdest.w >= 0.1){
-            break;
-        };
+
+        // Set volume depth if main isosurface level is reached
+        #import "fragment_volume_depth"
+
+        // If isosurface level threshold is reached stop ray marching
+        if(cdest.w >= u_isosurfaceLevel) break;
+
         rs = rs + rd;
     }
 
-    /* Final color */
-    cdest = cdest * u_intensity;
-    if(cdest.w < 0.1) discard;
-    color = vec4( vec3( (gl_FragDepth + 1.0) / 2.0 ), 1.0);
+    //If isosurface level has not been reached then discard
+    if(cdest.w < u_isosurfaceLevel) discard;
+
+    //'Color' are coordinates x, y and z of ray sample termination.
+    //Alpha channel 1.0 can be used to know if there is a hit or a discard.
+    color = vec4(rs, 1.0);
 }
 
 \debug_volumetric_jittering.fs
@@ -279,3 +308,50 @@ void main() {
     #import "fragment_debug_position_entry"
     color = color * u_intensity;
 }
+
+\debug_volumetric_depth.fs
+#import "fragment_headers_utils"
+//May need to adjust camera near and far to see something clear
+
+void main() {
+    #import "fragment_volume_depth_init"
+    #import "fragment_init"
+    #import "fragment_postinit_jittering"
+        
+    // Use raymarching algorithm
+    for(int i=0; i<100000; i++){
+        vec3 absrs = abs(rs);
+        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
+        
+        // Interpolation
+        #import "fragment_interpolation_better"
+        
+        // Classification
+        #import "fragment_classification_transfer_function"
+        
+        // Compositing
+        #import "fragment_compositing_basic"
+
+        // Set volume depth if main isosurface level is reached
+        #import "fragment_volume_depth"
+        
+        if(cdest.w >= 1.0) break;
+        rs = rs + rd;
+    }
+        
+    // Final color
+    if(cdest.w < 0.01) discard;
+    color = vec4( vec3(gl_FragDepth), 1.0 );
+}
+
+\debug_surface_depth.fs
+#version 300 es
+precision highp float;
+out vec4 color;
+uniform vec4 u_color;
+
+//May need to adjust camera near and far to see something clear
+void main() {
+    color = vec4( vec3(gl_FragDepth), 1.0 );
+}
+

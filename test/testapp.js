@@ -7,12 +7,11 @@ var app = {
 
     volumetrics: null,
     tfeditor: null,
+
+    testPicking: true,
 };
 
 function init(){
-    //var canvas = document.getElementById("mycanvas");
-	//app.volumetrics = new Volumetrics({canvas: canvas, visible: false, background: [0.3,0.3,0.3,1]});
-
     var container = document.getElementById("volumetrics");
     app.volumetrics = new Volumetrics({container: container, visible: true, background: [0.3,0.3,0.3,1]});
 
@@ -22,9 +21,28 @@ function init(){
 	app.tfeditor.setTF(tf);
 
     app.volumetrics.addTransferFunction(tf, "mytf");
+
+
+    /* Enable test picking */
+    app.volumetrics.context.canvas.addEventListener("mouseup", testPicking);
+    app.volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
 }
 
 init();
+
+function testPicking(event){
+    if(!testPicking) return;
+
+    var pickPos = app.volumetrics.pickPosition(event.layerX, app.volumetrics.context.canvas.height-event.layerY);
+    if(pickPos == null) return; //no pick
+    var sceneNode = new RD.SceneNode();
+    sceneNode.mesh = "sphere";
+    sceneNode.position = pickPos;
+    //sceneNode.shader = "debug_surface_depth"
+    sceneNode.color = [1, 1, 0];
+
+    app.volumetrics.scene._root.addChild(sceneNode);
+}
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////

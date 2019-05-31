@@ -769,20 +769,21 @@ VolumeNode = function VolumeNode(){
 VolumeNode.prototype._ctor = function(){
 	RD.SceneNode.prototype._ctor.call(this);
 
-	this._volume = null;
-	this._tf = null;
-
 	this.background = [0,0,0,0];
 	this.intensity = 1;
 	this.levelOfDetail = 100;
-	this.position = [0,0,0];
+	this.isosurfaceLevel = 0.5;
 
 	this.mesh = "proxy_box";
 	this.textures.jittering = "_jittering";
+
+	this.uniforms.u_im = mat4.create();
 }
 
 VolumeNode.prototype.render = function(renderer, camera){
 	//Update uniforms depending on Volumetrics
+	renderer.setModelMatrix(this._global_matrix);
+	mat4.invert(this.uniforms.u_im, this._global_matrix);
 
 	//Render node
 	renderer.renderNode( this, camera );
@@ -790,32 +791,22 @@ VolumeNode.prototype.render = function(renderer, camera){
 
 Object.defineProperty(VolumeNode.prototype, "volume", {
 	get: function() {
-		return this._volume;
+		return this.textures.volume;
 	},
 	set: function(v) {
-		this._volume = v;
 		this.textures.volume = v;
 	},
 });
 
 Object.defineProperty(VolumeNode.prototype, "tf", {
 	get: function() {
-		return this._tf;
+		return this.textures.tf;
 	},
 	set: function(v) {
-		this._tf = v;
 		this.textures.tf = v;
 	},
 });
 
-Object.defineProperty(VolumeNode.prototype, "dimensions", {
-	get: function() {
-		return this.uniforms.u_dimensions;
-	},
-	set: function(v) {
-		this.uniforms.u_dimensions = v;
-	},
-});
 Object.defineProperty(VolumeNode.prototype, "resolution", {
 	get: function() {
 		return this.uniforms.u_resolution;
@@ -824,6 +815,7 @@ Object.defineProperty(VolumeNode.prototype, "resolution", {
 		this.uniforms.u_resolution = v;
 	},
 });
+
 Object.defineProperty(VolumeNode.prototype, "background", {
 	get: function() {
 		return this.uniforms.u_background;
@@ -851,15 +843,13 @@ Object.defineProperty(VolumeNode.prototype, "levelOfDetail", {
 	},
 });
 
-//Expanded setter of position from SceneNode
-Object.defineProperty(VolumeNode.prototype, 'position', {
-	get: function() { return this._position; },
-	set: function(v) {
-		this._position.set(v);
-		this._must_update_matrix = true;
-		this.uniforms.u_position = v;	//Create a position uniform for the shaders
+Object.defineProperty(VolumeNode.prototype, "isosurfaceLevel", {
+	get: function() {
+		return this.uniforms.u_isosurfaceLevel;
 	},
-	enumerable: true
+	set: function(v) {
+		this.uniforms.u_isosurfaceLevel = v;
+	},
 });
 
 VolumeNode.prototype.hide = function(){
@@ -877,7 +867,7 @@ extendClass( VolumeNode, RD.SceneNode );
  * ==Volumetrics class==
  * Controls scene and renderers
  *
- * Useful options: canvas, container, visible, background
+ * Useful options: canvas, container, visible, background, levelOfDetail
  ***/
 Volumetrics = function Volumetrics(options){
 	//WebGL Renderer and scene
@@ -894,6 +884,7 @@ Volumetrics = function Volumetrics(options){
 	}
 
 	options.background = options.background || [0.7,0.7,0.9,1];
+	options.levelOfDetail = options.levelOfDetail || 100;
 
 	this.container = options.container;
 	this.context.canvas.style.width = "100%";
@@ -930,8 +921,13 @@ Volumetrics = function Volumetrics(options){
 		
 	};
 
+	this.picking = {
+		texture: null,
+		fbo: null,
+	};
+
 	this.background = options.background;
-	this.levelOfDetail = 100;
+	this.levelOfDetail = options.levelOfDetail;
 
 	this.visible = options.visible;
 
@@ -943,6 +939,7 @@ Volumetrics.prototype.onResize = function(){
 	var rect = this.context.canvas.getBoundingClientRect();
 	this.context.canvas.width = rect.width;
 	this.context.canvas.height = rect.height;
+	gl.viewport(0, 0, rect.width, rect.height);
 }
 
 Volumetrics.prototype.initProxyBox = function(){
@@ -964,8 +961,7 @@ Volumetrics.prototype.initProxyBox = function(){
 }
 
 Volumetrics.prototype.reloadShaders = function(){
-	//TODO move this to server and use Renderer.prototype.loadShaders
-	this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetrics/src/shaders.txt");
+	this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
 }
 
 Volumetrics.prototype.createJitteringTexture = function(x, y){
@@ -1001,13 +997,10 @@ Volumetrics.prototype.init = function(){
 	gl.captureKeys();
 	this.renderer.context.onkey = this.onkey.bind(this);
 
-	this.renderer._imvp_matrix = mat4.create();
-
-	//Global shader uniforms
-	this.renderer.setGlobalUniforms({
-		"u_eye": this.camera.position,
-		"u_imvp": this.renderer._imvp_matrix,
-	});
+	//Global shader uniforms - not needed at the moment
+	//this.renderer.setGlobalUniforms({
+	//	"u_eye": this.camera.position,
+	//});
 
 	//Init visibility
 	if(this.visible){
@@ -1084,15 +1077,7 @@ Volumetrics.prototype.update = function(dt){
 		this.camera.position = pos;
 	}
 
-	//Update volume nodes uniforms
-	for(var v of Object.keys(this.volumeNodes)){
-		this.volumeNodes[v].eye = this.camera.position;
-
-	}
-
 	this.scene.update(dt);
-
-	mat4.invert(this.renderer._imvp_matrix, this.renderer._mvp_matrix);
 }
 
 Volumetrics.prototype.render = function(){
@@ -1100,7 +1085,9 @@ Volumetrics.prototype.render = function(){
 	this.renderer.clear(this.background);
 
 	//render Scene
+	gl.enable(gl.DEPTH_TEST);
 	this.renderer.render(this.scene, this.camera);
+	gl.disable(gl.DEPTH_TEST);
 
 	//render Labels
 
@@ -1178,17 +1165,87 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 
 	volNode.mesh = "proxy_box";
 
-	volNode.eye = this.camera.position;
 	volNode.background = this.background;
-	volNode.stepSize = this.levelOfDetail;
+	volNode.levelOfDetail = this.levelOfDetail;
 
 	var v = this.volumes[volNode.volume];
-	volNode.dimensions = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
 	volNode.scaling = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
 	volNode.resolution = [v.width, v.height, v.depth];
 
 	this.volumeNodes[name] = volNode;
 	this.scene._root.addChild(volNode);
+}
+
+//Creates an FBO if there is none or if canvas size has changed. Returns the fbo
+Volumetrics.prototype.getFBO = function(){
+	var needFBO = false;
+
+	//Texture does not exist or does not have correct size, must be done/redone
+	if(this.picking.texture == null || this.picking.texture.width != this.context.canvas.width || this.picking.texture.height != this.context.canvas.height){
+		this.picking.texture = new GL.Texture(this.context.canvas.width, this.context.canvas.height, { format: gl.RGBA, type: gl.FLOAT, magFilter: gl.LINEAR,  });
+		needFBO = true;
+	}
+
+	if(this.picking.fbo == null || needFBO){
+		this.picking.fbo = new GL.FBO([this.picking.texture]);
+	}
+
+	return this.picking.fbo;
+}
+
+//Get the {x, y, z} world position that the mouse {x, y} is pointing
+Volumetrics.prototype.pickPosition = function(x, y){
+
+	var pick = null;
+	var dist = 0;
+	var fbo = this.getFBO(); //To render into a texture instead of canvas
+
+	//ArrayBufferView for accessing pixel data
+	var pixels = new Float32Array(4);
+
+	//activate fbo
+	fbo.bind();
+	//enable scisor test and set area
+	//gl.disable(gl.DEPTH_TEST);
+	gl.enable(gl.SCISSOR_TEST);
+	gl.scissor(x, y, 1, 1);
+	gl.clearColor(0,0,0,0);	//If later alpha channel equals 0 it's a discard or outside volume, no point in volume is picked
+
+	for(var v of Object.keys(this.volumeNodes)){
+		var volNode = this.volumeNodes[v];
+
+		//Change shader temporaly
+		var usedShader = volNode.shader;
+		volNode.shader = "volumetric_picking";
+
+		gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+		this.renderer.render(this.scene, this.camera, [volNode]);
+
+		//Set original shader
+		volNode.shader = usedShader;
+
+		//Get RGBA
+		gl.readPixels(x, y, 1, 1, gl.RGBA, gl.FLOAT, pixels);
+		if(pixels[3] != 1.0) continue; //1.0 => there is a hit, 0.0 => there is no hit with volume
+
+		//Pos in local coordinates [-1,1] to global coordinates [R]
+		var localPos = vec4.fromValues(pixels[0], pixels[1], pixels[2], 1.0);
+		var globalPos = vec4.create();
+		vec4.transformMat4(globalPos, localPos, volNode._global_matrix);
+		globalPos = vec3.fromValues(globalPos[0]/globalPos[3], globalPos[1]/globalPos[3], globalPos[2]/globalPos[3])
+
+		var testDist = vec3.distance(this.camera.position, globalPos);
+		if(pick == null || testDist < dist){
+			pick = globalPos;
+			dist = testDist;
+		}
+	}
+	//Deactivate fbo
+	gl.disable(gl.SCISSOR_TEST);
+	gl.enable(gl.DEPTH_TEST);
+	fbo.unbind();
+
+	return pick;
 }
 
 Object.defineProperty(Volumetrics.prototype, "background", {
