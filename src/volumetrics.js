@@ -466,6 +466,9 @@ TFEditor = function TFEditor(options){
 }
 
 TFEditor.prototype.setSize = function(w, h){
+	if(!w){
+		this._width = this.container.getBoundingClientRect().width;
+	}
 	this._width = w || this._width;
 	this._height = h || this._height;
 
@@ -493,6 +496,9 @@ TFEditor.prototype.initDivs = function(){
 	canvas.style.width = "100%";
 	this.domElements.canvas = canvas;
 	this.container.appendChild(canvas);
+
+	//Set resize listener
+	window.addEventListener("resize", this._onResize.bind(this));
 
 	//Set canvas listeners
 	canvas.addEventListener("mousedown", this._onMouseDown.bind(this));
@@ -544,6 +550,10 @@ TFEditor.prototype.initDivs = function(){
 	}
 
 	this.disableInputs();
+	this.setSize();
+}
+
+TFEditor.prototype._onResize = function(event){
 	this.setSize();
 }
 
@@ -752,7 +762,10 @@ TFEditor.prototype.drawTF = function(){
 	var radius = this._r;
 	var points = this.tf.points;
 	for(var p of points){
-		ctx.fillStyle = "rgb("+255*p.r+","+255*p.g+","+255*p.b+")";
+		var r = 255*p.r;
+		var g = 255*p.g;
+		var b = 255*p.b;
+		ctx.fillStyle = "rgb("+r+","+g+","+b+")";
 		if(p == this.state.selected) ctx.strokeStyle = "rgb(255,255,255)";
 		else ctx.strokeStyle = "rgb(0,0,0)";
 
