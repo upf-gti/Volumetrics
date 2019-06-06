@@ -5,7 +5,6 @@ volumetric_mip vertex.vs volumetric_mip.fs
 volumetric_picking vertex.vs volumetric_picking.fs
 debug_volumetric_jittering vertex.vs debug_volumetric_jittering.fs
 debug_volumetric_depth vertex.vs debug_volumetric_depth.fs
-debug_surface_depth vertex.vs debug_surface_depth.fs
 
 \vertex.vs
 #version 300 es
@@ -31,7 +30,7 @@ precision highp sampler3D;
 in vec3 v_pos;
 in vec3 v_normal;
 in vec2 v_coord;
-out vec4 color;
+out vec4 cdest;
 uniform vec3 u_camera_position;
 uniform vec3 u_position;
 uniform vec3 u_resolution;
@@ -49,9 +48,8 @@ uniform mat4 u_im;
 vec3 rayOrigin(in vec3 ro, in vec3 rd){
     if(abs(ro.x) <= 1.0 && abs(ro.y) <= 1.0 && abs(ro.z) <= 1.0) return ro;
     vec3 ip;
-    vec3 sides;
     // Only one these sides can hold the ray origin. The other faces will never hold it
-    sides = vec3(-sign(rd.x),-sign(rd.y),-sign(rd.z));
+    vec3 sides = vec3(-sign(rd.x),-sign(rd.y),-sign(rd.z));
     for(int i=0; i<3; i++){
         float c = (sides[i] - ro[i]) / rd[i];
         ip[i] = sides[i];
@@ -93,14 +91,15 @@ float pointDepth( in vec3 p ){
     
 // Compute ray origin as a point on the volume space
     ro = rayOrigin(ro, rd);
-
-    vec4 cdest = vec4(0.0,0.0,0.0,0.0);
     vec3 rs = ro;   //Ray sample
     rd = normalize(rd) * (1.0 / u_levelOfDetail);
 
+// Initialize cdest vec4 to store color
+    cdest = vec4(0.0,0.0,0.0,0.0);
+
 \fragment_postinit_jittering
     //Introduce an offset in the ray starting position along the ray direction
-    ro = ro - rd*jitteringFactor(gl_FragCoord.xy);
+    rs = rs - rd*jitteringFactor(gl_FragCoord.xy);
 
 \fragment_interpolation
     vec3 voxs = (rs + vec3(1.0))/2.0;
@@ -138,22 +137,22 @@ float pointDepth( in vec3 p ){
     }
 
 \fragment_debug_exit_point
-    color = vec4(abs(re.x) == 1.0 ? 1.0 : 0.0, abs(re.y) == 1.0 ? 1.0 : 0.0, abs(re.z) == 1.0 ? 1.0 : 0.0, 1.0);
+    cdest = vec4(abs(re.x) == 1.0 ? 1.0 : 0.0, abs(re.y) == 1.0 ? 1.0 : 0.0, abs(re.z) == 1.0 ? 1.0 : 0.0, 1.0);
 
 \fragment_debug_entry_point
-    color = vec4(abs(ro.x) == 1.0 ? 1.0 : 0.0, abs(ro.y) == 1.0 ? 1.0 : 0.0, abs(ro.z) == 1.0 ? 1.0 : 0.0, 1.0);
+    cdest = vec4(abs(ro.x) == 1.0 ? 1.0 : 0.0, abs(ro.y) == 1.0 ? 1.0 : 0.0, abs(ro.z) == 1.0 ? 1.0 : 0.0, 1.0);
 
 \fragment_debug_entry_abs
-    color = vec4(abs(ro.x), abs(ro.y), abs(ro.z), 1.0);
+    cdest = vec4(abs(ro.x), abs(ro.y), abs(ro.z), 1.0);
 
 \fragment_debug_distance_entry_exit
-    color = 0.1*vec4(distance(ro,re), distance(ro,re), distance(ro,re), 1.0);
+    cdest = 0.1*vec4(distance(ro,re), distance(ro,re), distance(ro,re), 1.0);
 
 \fragment_debug_position_entry
-    color = vec4(abs(ro).xyz, 1.0);
+    cdest = vec4(abs(ro).xyz, 1.0);
 
 \fragment_debug_jittering_intensity
-    color = vec4(jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), 1.0);
+    cdest = vec4(jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), jitteringFactor(gl_FragCoord.xy), 1.0);
 
 \volumetric_default.fs
 #import "fragment_headers_utils"
@@ -188,7 +187,6 @@ void main() {
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
-    color = cdest;
 }
 
 \volumetric_xray.fs
@@ -223,7 +221,6 @@ void main() {
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
-    color = cdest;
 }
 
 \volumetric_mip.fs
@@ -258,7 +255,6 @@ void main() {
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
     cdest = u_background * (1.0 - cdest.w) + cdest;
-    color = cdest;
 }
 
 \volumetric_picking.fs
@@ -296,7 +292,7 @@ void main() {
 
     //'Color' are coordinates x, y and z of ray sample termination.
     //Alpha channel 1.0 can be used to know if there is a hit or a discard.
-    color = vec4(rs, 1.0);
+    cdest = vec4(rs, 1.0);
 }
 
 \debug_volumetric_jittering.fs
@@ -306,7 +302,7 @@ void main() {
     #import "fragment_init"
     #import "fragment_postinit_jittering"
     #import "fragment_debug_position_entry"
-    color = color * u_intensity;
+    cdest = cdest * u_intensity;
 }
 
 \debug_volumetric_depth.fs
@@ -341,17 +337,5 @@ void main() {
         
     // Final color
     if(cdest.w < 0.01) discard;
-    color = vec4( vec3(gl_FragDepth), 1.0 );
+    cdest = vec4( vec3(gl_FragDepth), 1.0 );
 }
-
-\debug_surface_depth.fs
-#version 300 es
-precision highp float;
-out vec4 color;
-uniform vec4 u_color;
-
-//May need to adjust camera near and far to see something clear
-void main() {
-    color = vec4( vec3(gl_FragDepth), 1.0 );
-}
-

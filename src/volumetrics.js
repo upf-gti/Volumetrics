@@ -106,7 +106,7 @@ Volume.prototype.getDataTexture = function(){
 	if(!this.isValid()) return false;
 
 	if(this._dataTexture == null){
-		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, texture_type: GL.TEXTURE_3D, format: gl.LUMINANCE, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE, pixel_data: this._dataView});
+		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, pixel_data: this._dataView, texture_type: GL.TEXTURE_3D, format: gl.LUMINANCE, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE, no_flip: false, premultiply_alpha: false});
 		//litegl does not handle wrap for Z direction - not needed because shader stops outside volume
 		//gl.activeTexture( gl.TEXTURE0 + Texture.MAX_TEXTURE_IMAGE_UNITS - 1);
 		//gl.bindTexture( this._dataTexture.texture_type, this._dataTexture.handler);
@@ -271,11 +271,9 @@ Volume.loadDLFile = function(file, callback){
 TransferFunction = function TransferFunction(){
 	this.width = 256;
 
-	//4 segmented lines, 1 for each channel
-	this.R = [{x:0,y:0},{x:0.33,y:1},{x:0.66,y:0},{x:1,y:1}];
-	this.G = [{x:0,y:0},{x:1,y:1}];
-	this.B = [{x:0,y:0},{x:1,y:1}];
-	this.A = [{x:0,y:0},{x:1,y:1}];
+	//RGBA points
+	this.points = [{x:0,r:0,g:0,b:0,a:0}, {x:1,r:1,g:1,b:1,a:1}];
+
 
 	this._buffer = null;
 	this._view = null;
@@ -285,23 +283,24 @@ TransferFunction = function TransferFunction(){
 	this._needUpload = false;
 }
 
-TransferFunction.prototype.sortChannel = function(channel){
-	var c = this[channel];
-	c.sort(function(a,b){
+TransferFunction.prototype.sort = function(){
+	this.points.sort(function(a,b){
 		if(a.x < b.x) return -1;
 		if(a.x > b.x) return 1;
 		return 0;
 	});
+	this._needUpdate = true;
 }
 
-TransferFunction.prototype.cleanChannel = function(channel){
-	this.sortChannel(channel);
+TransferFunction.prototype.clean = function(){
+	this.sort();
 
 	var count = 0;
-	for(var p of this[channel]){
+	for(var p of this.points){
 		if(p.x < 0) count++;
 	}
-	this[channel].splice(0,count);
+	this.points.splice(0,count);
+	this._needUpdate = true;
 }
 
 TransferFunction.prototype.initTransferFunction = function(){
@@ -316,78 +315,40 @@ TransferFunction.prototype.initTransferFunction = function(){
 
 TransferFunction.prototype.updateTransferFunction = function(){
 	//Fill buffer data
-	var i_r = i_g = i_b = i_a = 0;
+	var i = 0;
 	var r = g = b = a = 0;
 	var t = 0;
+	var points = this.points;
 
-	for(var i=0; i<this.width; i++){
-		var pos = i*4;
-		var i_01 = i / (this.width-1);
+	for(var pos=0; pos<4*this.width; pos+=4){
+		var pos_01 = pos / (this.width-1) / 4;
 
-		if(i_r < this.R.length && i_01 > this.R[i_r].x) i_r++;
-		if(i_g < this.G.length && i_01 > this.G[i_g].x) i_g++;
-		if(i_b < this.B.length && i_01 > this.B[i_b].x) i_b++;
-		if(i_a < this.A.length && i_01 > this.A[i_a].x) i_a++;
-
-		//interpolate between points for each channel RGBA
-		if(this.R.length == 0){
-			r = 0;
-		}else if(i_r == 0){
-			r = this.R[i_r].y;
-		}else if(i_r == this.R.length){
-			r = this.R[i_r-1].y;
+		if(i < points.length && pos_01 > points[i].x) i++;
+		if(points.length == 0){
+			r = g = b = a = 0;
+		}else if(i == 0){
+			r = points[i].r;
+			g = points[i].g;
+			b = points[i].b;
+			a = points[i].a;
+		}else if(i == points.length){
+			r = points[i-1].r;
+			g = points[i-1].g;
+			b = points[i-1].b;
+			a = points[i-1].a;
 		}else{
-			//avoid a hole in the universe fabric :)
-			if(this.R[i_r-1].x == this.R[i_r].x){
-				r = this.R[i_r].y;
+			if(points[i-1].x == points[i].x){
+				r = points[i].r;
+				g = points[i].g;
+				b = points[i].b;
+				a = points[i].a;
 			}else{
-				t = (i_01-this.R[i_r-1].x)/(this.R[i_r].x-this.R[i_r-1].x);
-				r = (1-t)*this.R[i_r-1].y + t*this.R[i_r].y;
-			}
-		}
-
-		if(this.G.length == 0){
-			g = 0;
-		}else if(i_g == 0){
-			g = this.G[i_g].y;
-		}else if(i_g == this.G.length){
-			g = this.G[i_g-1].y;
-		}else{
-			if(this.G[i_g-1].x == this.G[i_g].x){
-				g = this.G[i_g].y;
-			}else{
-				t = (i_01-this.G[i_g-1].x)/(this.G[i_g].x-this.G[i_g-1].x);
-				g = (1-t)*this.G[i_g-1].y + t*this.G[i_g].y;
-			}
-		}
-
-		if(this.B.length == 0){
-			b = 0;
-		}else if(i_b == 0){
-			b = this.B[i_b].y;
-		}else if(i_b == this.B.length){
-			b = this.B[i_b-1].y;
-		}else{
-			if(this.B[i_b-1].x == this.B[i_b].x){
-				b = this.B[i_b].y;
-			}else{
-				t = (i_01-this.B[i_b-1].x)/(this.B[i_b].x-this.B[i_b-1].x);
-				b = (1-t)*this.B[i_b-1].y + t*this.B[i_b].y;
-			}
-		}
-
-		if(this.A.length == 0){
-			a = 0;
-		}else if(i_a == 0){
-			a = this.A[i_a].y;
-		}else if(i_a == this.A.length){
-			a = this.A[i_a-1].y;
-		}else{
-			if(this.A[i_a-1].x == this.A[i_a].x){
-				a = this.A[i_a].y;
-			}else{
-				t = (i_01-this.A[i_a-1].x)/(this.A[i_a].x-this.A[i_a-1].x);
-				a = (1-t)*this.A[i_a-1].y + t*this.A[i_a].y;
+				t = (pos_01-points[i-1].x)/(points[i].x-points[i-1].x);
+				//Pow and sqrt because real color is value^2
+				r = Math.sqrt( (1-t) * Math.pow(points[i-1].r, 2) + t * Math.pow(points[i].r, 2) );
+				g = Math.sqrt( (1-t) * Math.pow(points[i-1].g, 2) + t * Math.pow(points[i].g, 2) );
+				b = Math.sqrt( (1-t) * Math.pow(points[i-1].b, 2) + t * Math.pow(points[i].b, 2) );
+				a = (1-t)*points[i-1].a + t*points[i].a;
 			}
 		}
 
@@ -441,9 +402,11 @@ TransferFunction.prototype.getTexture = function(){
 }
 
 TransferFunction.prototype.updateTexture = function(){
-	//Update texture data in GPU
-	this._texture.uploadData(this._view, {}, false);
-	this._needUpload = false;
+	if(this._texture != null){
+		//Update texture data in GPU
+		this._texture.uploadData(this._view, {}, false);
+		this._needUpload = false;
+	}
 }
 
 /***
@@ -451,48 +414,29 @@ TransferFunction.prototype.updateTexture = function(){
  ***/
 TFEditor = function TFEditor(options){
 	options = options || {};
-	options.container = options.container || document.body;
+
+	if(!options.container){
+		options.container = document.createElement("div");
+		document.body.appendChild(options.container);
+	}
+	this.container = options.container = options.container;
+
 	if(!(options.visible === true || options.visible === false)){
 		options.visible = true;
 	}
-
-	this._top = 10;
-	this._left = 20;
-	this._bottom = 20;
+	this.visible = options.visible;
 
 	var rect = options.container.getBoundingClientRect();
-	this._width = rect.width - this._left;
-	if(this._width < 0) this._width = 0;
-	this._r = 6 / 256;
+	this._width = rect.width;
+	this._height = 20;
+	this._middle = 0.2;
+	this._r = 5;
 
-	//Divs
-	this.TFEdiv = document.createElement("div");
-	this.TFEdivTop = document.createElement("div");
-	this.TFEdivTools = document.createElement("div");
-	this.TFEdivCanvas = document.createElement("div");
+	//Inputs and canvas
+	this.domElements = {};
+	this.initDivs();
 
-	this.TFEdiv.appendChild(this.TFEdivTop);
-	this.TFEdiv.appendChild(this.TFEdivTools);
-	this.TFEdiv.appendChild(this.TFEdivCanvas);
-	this.TFEdiv.style.display = this.visible ? "block" : "none";
-
-	//TODO provide a way to change style
-	this.TFEdivTop.style["background-color"] = "#99ccff";
-	this.TFEdivTools.style["background-color"] = "#e6f2ff";
-
-	options.container.appendChild(this.TFEdiv);
-
-	//Canvas
-	this.canvas = document.createElement("canvas");
-	this.ctx = this.canvas.getContext("2d");
-	this.ctx.translate(0.5,0.5);
-	this.setSize(this._width);
-	this.TFEdivCanvas.appendChild(this.canvas);
-
-	//Listeners
-	this.canvas.addEventListener("mousedown", this._onMouseDown.bind(this));
-	this.canvas.addEventListener("mouseup", this._onMouseUp.bind(this));
-	this.canvas.addEventListener("mousemove", this._onMouseMove.bind(this));
+	this.ctx = this.domElements.canvas.getContext("2d");
 
 	//State
 	this.state = {
@@ -501,10 +445,11 @@ TFEditor = function TFEditor(options){
 			y: 0,
 			downx: 0,
 			downy: 0,
-			drag: false,
+			draging: false,
+			dragged: false,
 		},
-		channel: null,
-		selected: [],
+		previousSelectedUp: null,
+		selected: null,
 	};
 
 	//TF to edit and histogram to show
@@ -520,219 +465,272 @@ TFEditor = function TFEditor(options){
 	}
 }
 
+TFEditor.prototype.setSize = function(w, h){
+	this._width = w || this._width;
+	this._height = h || this._height;
+
+	var textWidth = "50px";
+	var sliderWidth = "calc(100% - 60px)";
+
+	this.domElements.canvas.width = this._width;
+	this.domElements.canvas.height = this._height;
+	this.domElements.canvas.style.height = this._height + "px";
+
+	for(var c of ["r", "g", "b", "a"]){
+		this.domElements["text_"+c].style.width = textWidth;
+		this.domElements["slider_"+c].style.width = sliderWidth;
+	}
+}
+
+TFEditor.prototype.initDivs = function(){
+	while(this.container.lastChild){
+		this.container.removeChild(this.container.lastChild);
+	}
+
+	this.domElements = {};
+
+	var canvas = document.createElement("canvas");
+	canvas.style.width = "100%";
+	this.domElements.canvas = canvas;
+	this.container.appendChild(canvas);
+
+	//Set canvas listeners
+	canvas.addEventListener("mousedown", this._onMouseDown.bind(this));
+	canvas.addEventListener("mouseup", this._onMouseUp.bind(this));
+	canvas.addEventListener("mousemove", this._onMouseMove.bind(this));
+	canvas.addEventListener("mouseleave", this._onMouseLeave.bind(this));
+
+	for(var c of ["r", "g", "b", "a"]){
+		var div = document.createElement("div");
+		div.style.width = "100%";
+		div.style.height = "20px";
+		div.style.margin = "0";
+		div.style.padding = "0";
+		this.domElements["div_"+c] = div;
+
+		var text = document.createElement("a");
+		text.style.width = "50px";
+		text.style["font-family"] = "Courier New";
+		text.style["font-size"] = "12px";
+		text.style.float = "left";
+		text.style.margin = "0";
+		text.style["margin-right"] = "3px";
+		text.style.padding = "0";
+		text.id = "TFEditor_text_"+c;
+		this.domElements["text_"+c] = text;
+
+		var slider = document.createElement("input");
+		slider.type = "range";
+		slider.min = 0;
+		slider.max = 1;
+		slider.step = 0.001;
+		slider.value = 0.5;
+		slider.style.float = "right";
+		slider.style.margin = "0";
+		slider.style["margin-left"] = "3px";
+		slider.style["margin-right"] = "3px";
+		slider.style.padding = "0";
+		slider.id = "TFEditor_slider_"+c;
+		slider.disabled = true;
+		this.domElements["slider_"+c] = slider;
+
+		//Append to div and to container
+		div.appendChild(text);
+		div.appendChild(slider);
+		this.container.appendChild(div);
+
+		//Set listeners
+		slider.addEventListener("input", this._onSliderChange.bind(this));
+	}
+
+	this.disableInputs();
+	this.setSize();
+}
+
+TFEditor.prototype._onSliderChange = function(event){
+	var id = event.target.id;
+	var val = event.target.value;
+	var c = id[id.length-1];
+	var v = Math.max(Math.min(parseFloat(val), 1), 0);
+
+	this.modify(c, v);
+	this.setInputs(this.state.selected);
+}
+
+TFEditor.prototype._onMouseDown = function(event){
+	this.state.mouse.dragging = true;
+	var x = this.state.mouse.downx = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
+	var y = this.state.mouse.downy = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
+
+	this.select(x);
+
+	if(this.state.selected == null){
+		if(Math.abs( this.state.mouse.y - 0.5 ) < this._middle/2 )
+			this.create(x);
+	}
+}
+
+TFEditor.prototype._onMouseUp = function(event){
+	var x = this.state.mouse.x;
+	var y = this.state.mouse.y;
+
+	var s = this.state.selected;
+	this.select(x);
+	var selectedUp = this.state.selected;
+
+	if(!this.state.mouse.dragged && this.state.previousSelectedUp == selectedUp){
+		this.remove();
+	}
+
+	this.state.mouse.dragging = false;
+	this.state.mouse.dragged = false;
+	this.state.selected = s;
+	this.state.previousSelectedUp = selectedUp;
+
+	return false;
+}
+
+TFEditor.prototype._onMouseMove = function(event){
+	var x = this.state.mouse.x = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
+	var y = this.state.mouse.y = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
+
+	if(this.state.mouse.dragging && this.state.selected){
+		this.state.mouse.dragged = true;
+		this.moveTo(x);
+	}
+}
+
+TFEditor.prototype._onMouseLeave = function(event){
+	this.state.mouse.dragging = false;
+	this.state.mouse.dragged = false;
+}
+
 TFEditor.prototype.show = function(){
 	this.visible = true;
-	this.TFEdiv.style.display = "block";
+	this.container.style.display = "block";
 	this.render();
 }
 
 TFEditor.prototype.hide = function(){
 	this.visible = false;
-	this.TFEdiv.style.display = "none";
-}
-
-TFEditor.prototype.setSize = function(w){
-	this._width = w;
-
-	this.TFEdiv.style.width = (this._left + this._width) + "px";
-	this.TFEdiv.style.height = (this._top + this._width + this._bottom) + "px";
-
-	this.TFEdivTop.style.width = (this._left + this._width) + "px";
-	this.TFEdivTop.style.height = this._top + "px";
-
-	this.TFEdivTools.style.float = "left";
-	this.TFEdivTools.style.width = this._left + "px";
-	this.TFEdivTools.style.height = (this._width + this._bottom) + "px";
-
-	this.canvas.width = this._width;
-	this.canvas.height = this._width + this._bottom;
-
-	//Change style
+	this.container.style.display = "none";
 }
 
 TFEditor.prototype.setTF = function(tf){
 	this.tf = tf;
 }
 
-TFEditor.prototype.select = function(x, y){
-	var r = this._r;
-	this.state.selected = [];
-	for(var channel of ["R", "G", "B", "A"]){
-		if(this.state.channel == channel || this.state.channel == null){
-			for(var p of this.tf[channel]){
-				if(p.x >= x-r && p.x <= x+r && p.y >= y-r && p.y <= y+r){
-					this.state.selected.push(p);
-					break;
-				}
-			}
+TFEditor.prototype.disableInputs = function(b){
+	for(var c of ["r", "g", "b", "a"]){
+		this.domElements["text_"+c].innerText = c + ": -";
+		this.domElements["slider_"+c].disabled = b;
+	}
+}
+
+TFEditor.prototype.setInputs = function(p){
+	this.disableInputs(false);
+	for(var c of ["r", "g", "b", "a"]){
+		this.domElements["text_"+c].innerText = c + ":" + Math.floor( p[c] * 1000 ) / 1000;
+		this.domElements["slider_"+c].value = p[c];
+	}
+}
+
+TFEditor.prototype.select = function(x){
+	var r = this._r / this._width;
+	this.unselect();
+
+	for(var p of this.tf.points){
+		if(p.x >= x-r && p.x <= x+r){
+			this.state.selected = p;
+			this.setInputs(p);
+			break;
 		}
 	}
 }
 
-TFEditor.prototype.moveTo = function(x, y){
+TFEditor.prototype.unselect = function(){
+	this.state.selected = null;
+	this.disableInputs(true);
+}
+
+TFEditor.prototype.moveTo = function(x){
+	if(this.state.selected != null){
+		this.state.selected.x = x;
+		this.tf.sort();
+	}
+
 	if(this.state.selected.length > 0){
 		for(var p of this.state.selected){
 			p.x = x;
 			p.y = y;
 		}
 
-		this.tf.sortChannel("R");
-		this.tf.sortChannel("G");
-		this.tf.sortChannel("B");
-		this.tf.sortChannel("A");
-		this.tf._needUpdate = true;
+		this.tf.sort();
 	}
 }
 
-TFEditor.prototype.create = function(x, y){
-	for(var channel of ["R", "G", "B", "A"]){
-		if(this.state.channel == channel || this.state.channel == null){
-			var p = {x: x, y: y};
-			this.tf[channel].push(p);
-			this.tf.sortChannel(channel);
-		}
-		this.tf._needUpdate = true;
-	}
+TFEditor.prototype.create = function(x){
+	var transferFunction = this.tf.getTransferFunction();
+
+	var l = this.tf.width - 1;
+	var i = 4*Math.round( x*l );
+	var r = transferFunction[i]   / l;
+	var g = transferFunction[i+1] / l;
+	var b = transferFunction[i+2] / l;
+	var a = transferFunction[i+3] / l;
+
+	var p = {x:x, r:r, g:g, b:b, a:a };
+
+	this.tf.points.push(p);
+	this.tf.sort();
+
+	this.state.selected = p;
+	this.setInputs(p);
 }
 
 TFEditor.prototype.remove = function(){
-	if(this.state.selected.length > 0){
-		for(var p of this.state.selected){
-			p.x = -1;
-		}
+	if(this.state.selected != null){
+		this.state.selected.x = -1;
+		this.tf.clean();
+		this.unselect();
+	}
+}
 
-		this.tf.cleanChannel("R");
-		this.tf.cleanChannel("G");
-		this.tf.cleanChannel("B");
-		this.tf.cleanChannel("A");
+TFEditor.prototype.modify = function(c, v){
+	if(this.state.selected){
+		this.state.selected[c] = v;
 		this.tf._needUpdate = true;
-	}
-}
-
-TFEditor.prototype._onMouseDown = function(event){
-	this.state.mouse.drag = true;
-	var x = this.state.mouse.downx = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
-	var y = this.state.mouse.downy = 1 - Math.min(Math.max(event.layerY, 0), this._width) / this._width;
-
-	this.select(x, y);
-}
-
-TFEditor.prototype._onMouseUp = function(event){
-	var x = this.state.mouse.x;
-	var y = this.state.mouse.y;
-	var dx = x - this.state.mouse.downx;
-	var dy = y - this.state.mouse.downy;
-
-	if(dx == 0 && dy == 0){
-		if(this.state.selected.length > 0){
-			this.remove();
-		}else{
-			this.create(x, y);
-		}
-	}
-
-	this.state.mouse.selected = [];
-	this.state.mouse.drag = false;
-}
-
-TFEditor.prototype._onMouseMove = function(event){
-	var x = this.state.mouse.x = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
-	var y = this.state.mouse.y = 1 - Math.min(Math.max(event.layerY, 0), this._width) / this._width;
-
-	if(this.state.mouse.drag){
-		this.moveTo(x, y);
-	}
-
-}
-
-TFEditor.prototype.drawGraph = function(){
-	var w0 = 0;
-	var h0 = 0;
-
-	var w = this._width;
-	var h = this._width;
-
-	//Clear canvas
-	var ctx = this.ctx;
-	ctx.fillStyle = "rgb(200,200,200)";
-	ctx.fillRect(w0,h0,w,h);
-
-	//If histogram draw it in the back
-	if(this.histogramBuffer){
-		var l = this.histogramBuffer.length;
-		var s = (l-1)/(w-1);
-
-		ctx.fillStyle = "rgb(160,160,160)";
-		for(var i=0; i<w; i++){
-			var j = Math.round(i * s);
-
-			ctx.fillRect(w0+i, h0+h-this.histogramBuffer[j], 1, this.histogramBuffer[j]);
-		}
-	}
-
-	var pi2 = Math.PI*2;
-	var radius = this._r * w;
-
-	var channels = ["R", "G", "B", "A"];
-	var fillStyles = ["rgb(255,0,0)", "rgb(0,255,0)", "rgb(0,0,255)", "rgb(255,255,255)"];
-	var strokeStyles = ["rgb(255,0,0)", "rgb(0,255,0)", "rgb(0,0,255)", "rgb(255,255,255)"];
-	for(var i = 0; i < 4; i++){
-		var C = this.tf[channels[i]];
-		ctx.fillStyle = fillStyles[i];
-		ctx.strokeStyle = strokeStyles[i];
-
-		ctx.lineWidth = 2*w / 256;
-		ctx.beginPath();
-		y = C.length > 0 ? h0+h - (h*C[0].y) : 0;
-		ctx.moveTo(w0, y);
-		for(var j=0; j<C.length; j++){
-			x = w0 	 + w*C[j].x;
-			y = h0+h - h*C[j].y;
-			ctx.lineTo(x, y);
-		}
-		ctx.lineTo(w0+w, y);
-		ctx.stroke();
-
-		ctx.lineWidth = 1;
-		for(var j=0; j<C.length; j++){
-			x = w0 	 + w*C[j].x;
-			y = h0+h - h*C[j].y;
-			ctx.beginPath();
-			ctx.ellipse(x,y,radius,radius,0,0,pi2);
-			ctx.fill();
-		}
 	}
 }
 
 TFEditor.prototype.drawTF = function(){
-	var w0 = 0;
-	var h0 = this._width;
-
 	var w = this._width;
-	var h = this._bottom;
+	var h = this._height;
+
+	var hh = h/2;
+
+	var hline = h*this._middle;
+	var hdraw = hh-hline/2;
+
 
 	//Clear canvas
 	var ctx = this.ctx;
 	ctx.fillStyle = "rgb(255,255,255)";
-	ctx.fillRect(w0,h0,w,h);
-
-
-	var hh = h/2;
+	ctx.fillRect(0,0,w,h);
 
 	//Transparency squares
 	ctx.fillStyle = "rgb(200,200,200)";
-	var sqs = h / 4;
+	var sqs = (hdraw) / 2;
 	for(var i=0; i<w/sqs+2; i++){
-		ctx.fillRect(i*sqs, h0+hh+(i%2)*sqs, sqs, sqs);
+		ctx.fillRect(i*sqs, hline+hdraw+(i%2)*sqs, sqs, sqs);
 	}
 
 	//TF
 	var transferFunction = this.tf.getTransferFunction();
 	
-	var l = 256 - 1;
+	var l = this.tf.width - 1;
 	var s = l/(w-1);
 	
-
 	for(var i=0; i<w; i++){
 		var pos = Math.round(i*s)*4;
 
@@ -742,9 +740,29 @@ TFEditor.prototype.drawTF = function(){
 		var a = transferFunction[pos+3]/l;
 
 		ctx.fillStyle = "rgb("+r+","+g+","+b+")";
-		ctx.fillRect(w0+i,h0,1,hh);
+		ctx.fillRect(i,0,1,hdraw);
 		ctx.fillStyle = "rgba("+r+","+g+","+b+","+a+")";
-		ctx.fillRect(w0+i,h0+hh,1,hh);
+		ctx.fillRect(i,hdraw+hline,1,hdraw);
+		ctx.fillStyle = "rgb(0,0,0)";
+		ctx.fillRect(i,hdraw,1,hline);
+	}
+
+	//Draw TF points
+	var pi2 = Math.PI*2;
+	var radius = this._r;
+	var points = this.tf.points;
+	for(var p of points){
+		ctx.fillStyle = "rgb("+255*p.r+","+255*p.g+","+255*p.b+")";
+		if(p == this.state.selected) ctx.strokeStyle = "rgb(255,255,255)";
+		else ctx.strokeStyle = "rgb(0,0,0)";
+
+		x = p.x * w;
+		ctx.beginPath();
+		ctx.ellipse(x,hh,radius,radius,0,0,pi2);
+		ctx.fill();
+		ctx.beginPath();
+		ctx.ellipse(x,hh,radius,radius,0,0,pi2);
+		ctx.stroke();
 	}
 }
 
@@ -752,7 +770,6 @@ TFEditor.prototype.render = function(){
 	if(this.visible){
 		requestAnimationFrame( this.render.bind(this) );
 		if(this.tf){
-			this.drawGraph();
 			this.drawTF();
 		}
 	}
@@ -898,7 +915,7 @@ Volumetrics = function Volumetrics(options){
 	this.labelRenderer = null; //new LabelRenderer();
 	this.labels = {};
 
-	//Volumes and TransferFunctions Storage
+	//Volumes and TransferFunctions storage
 	this.volumes = {};
 	this.tfs = {};
 
@@ -947,7 +964,6 @@ Volumetrics.prototype.initProxyBox = function(){
 
 	var options = {};
 	var buffers = {};
-	//buffers.vertices = new Float32Array([-1,1,-1,-1,-1,+1,-1,1,1,-1,1,-1,-1,-1,-1,-1,-1,+1,1,1,-1,1,1,1,1,-1,+1,1,1,-1,1,-1,+1,1,-1,-1,-1,1,1,1,-1,1,1,1,1,-1,1,1,-1,-1,1,1,-1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,1,-1,-1,1,-1,-1,1,1,1,1,1,-1,-1,-1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,1,-1,-1,1]);
 	//switch orientation of faces so the front is inside
 	buffers.vertices = new Float32Array([-1,1,-1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,-1,1,-1,1,1,1,-1,1,1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,1,-1,1]);
 	buffers.normals = new Float32Array([-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0]);
@@ -964,11 +980,11 @@ Volumetrics.prototype.reloadShaders = function(){
 	this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
 }
 
-Volumetrics.prototype.createJitteringTexture = function(x, y){
+Volumetrics.prototype.createJitteringTexture = function(x, y, strength){
 	var view = new Uint8Array(x*y);
 
 	for(var i=0; i<x*y; i++){
-		view[i] = Math.floor( 255*Math.random() );
+		view[i] = Math.floor( strength*255*Math.random() );
 	}
 
 	var texture = new GL.Texture(x, y, {texture_type: GL.TEXTURE_2D, format: gl.LUMINANCE, magFilter: gl.NEAREST, wrap: gl.REPEAT, pixel_data: view});
@@ -986,7 +1002,7 @@ Volumetrics.prototype.init = function(){
 
 	//Load shaders
 	this.reloadShaders();
-	this.createJitteringTexture(128,128);
+	this.createJitteringTexture(1024,1024,0.5);
 
 	//Mouse actions
 	gl.captureMouse();
@@ -1162,8 +1178,6 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 	if(volNode.shader == null){
 		volNode.shader = "volumetric_default";
 	}
-
-	volNode.mesh = "proxy_box";
 
 	volNode.background = this.background;
 	volNode.levelOfDetail = this.levelOfDetail;

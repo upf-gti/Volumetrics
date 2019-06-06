@@ -16,6 +16,9 @@ function init(){
     app.volumetrics = new Volumetrics({container: container, visible: true, background: [0.3,0.3,0.3,1]});
 
 	var tf = new TransferFunction();
+    tf.points = [{x:0.35,r:0,g:0,b:0,a:0.001}, {x:0.4,r:0,g:1,b:0,a:0.001}, {x:0.7,r:1,g:0,b:0,a:0.3}, {x:0.9,r:0,g:0.8,b:0.9,a:0.6}];
+    tf._needUpdate = true;
+
     var tfecontainer = document.getElementById("tfeditor");
     app.tfeditor = new TFEditor({container: tfecontainer, visible: true});
 	app.tfeditor.setTF(tf);
