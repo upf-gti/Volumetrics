@@ -38,6 +38,7 @@ uniform vec4 u_background;
 uniform sampler2D u_jittering_texture;
 uniform sampler2D u_tf_texture;
 uniform sampler3D u_volume_texture;
+uniform float u_voxelScaling;
 uniform float u_intensity;
 uniform float u_levelOfDetail;
 uniform float u_isosurfaceLevel;
@@ -103,11 +104,11 @@ float pointDepth( in vec3 p ){
 
 \fragment_interpolation
     vec3 voxs = (rs + vec3(1.0))/2.0;
-    float f = texture( u_volume_texture, voxs ).x;
+    float f = u_voxelScaling * texture( u_volume_texture, voxs ).x;
 
 \fragment_interpolation_better
     vec3 voxs = (rs + vec3(1.0))/2.0;
-    float f = getVoxel(voxs).x;
+    float f = u_voxelScaling * getVoxel(voxs).x;
 
 \fragment_classification_direct
     vec4 csrc = vec4(f,f,f,f);

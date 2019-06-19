@@ -3,6 +3,68 @@
  * v1.0
  ***/
 
+/***
+ * ==Utils class==
+ ***/
+ var Utils = {};
+
+ Utils.toHalf = (function() {
+ 	//https://esdiscuss.org/topic/float16array
+	
+	var floatView = new Float32Array(1);
+	var int32View = new Int32Array(floatView.buffer);
+
+	/* This method is faster than the OpenEXR implementation (very often
+	 * used, eg. in Ogre), with the additional benefit of rounding, inspired
+	 * by James Tursa?s half-precision code. */
+	return function toHalf(val) {
+
+		floatView[0] = val;
+		var x = int32View[0];
+
+		var bits = (x >> 16) & 0x8000; /* Get the sign */
+		var m = (x >> 12) & 0x07ff; /* Keep one extra bit for rounding */
+		var e = (x >> 23) & 0xff; /* Using int is faster here */
+
+		/* If zero, or denormal, or exponent underflows too much for a denormal
+		 * half, return signed zero. */
+		if (e < 103) {
+			return bits;
+		}
+
+		/* If NaN, return NaN. If Inf or exponent overflow, return Inf. */
+		if (e > 142) {
+			bits |= 0x7c00;
+			/* If exponent was 0xff and one mantissa bit was set, it means NaN,
+			 * not Inf, so make sure we set one mantissa bit too. */
+			bits |= ((e == 255) ? 0 : 1) && (x & 0x007fffff);
+			return bits;
+		}
+
+		/* If exponent underflows but not too much, return a denormal */
+		if (e < 113) {
+			m |= 0x0800;
+			/* Extra rounding may overflow and set mantissa to 0 and exponent
+			 * to 1, which is OK. */
+			bits |= (m >> (114 - e)) + ((m >> (113 - e)) & 1);
+			return bits;
+		}
+
+		bits |= ((e - 112) << 10) | (m >> 1);
+		/* Extra rounding. An overflow will set mantissa to 0 and increment
+		 * the exponent, which is OK. */
+		bits += m & 1;
+		return bits;
+	};
+}());
+
+Utils.uint16ArrayToHalf = function(view){
+	var view16 = new Uint16Array(view.length);
+	for(var i = 0; i<view.length; i++){
+		view16[i] = Utils.toHalf(view[i]);
+	}
+	return view16;
+}
 
 /***
  * ==Volume class==
@@ -37,6 +99,12 @@ Volume = function Volume(){
 	//GLTextures
 	this._dataTexture = null;
 	this._gradientTexture = null;
+
+	//Auxiliar
+	this._voxelSize = null;
+	this._byteSize = null;
+	this._min = null;
+	this._max = null;
 }
 
 Volume.create = function(width, height, depth, options, dataBuffer){
@@ -66,8 +134,19 @@ Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer)
 		console.warn("Only works with multiples of 8!")
 	}
 
+	this._voxelSize = this.width * this.height * this.depth;
+	this._byteSize = this._voxelSize * this._voxelDepthBytes;
+
 	this._dataBuffer = dataBuffer;
-	this._dataView = new Uint8Array(this._dataBuffer);
+	this._dataView = null;
+	if(this.voxelDepth == 8){
+		this._dataView = new Uint8Array(this._dataBuffer);
+	}else if(this.voxelDepth == 16){
+		this._dataView = new Uint16Array(this._dataBuffer);
+	}else if(this.voxelDepth == 32){
+		this._dataView = new Float32Array(this._dataBuffer);
+	}
+	
 
 	//Erase previous values if it's updated
 	this._histogram = null;
@@ -76,69 +155,84 @@ Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer)
 
 Volume.prototype.isValid = function(){
 	if(this.width > 0 && this.height > 0 && this.depth > 0 && this._dataBuffer != null){
-		return (Math.ceil(this.getNumberOfVoxels() * this.voxelDepth / 8) == this._dataBuffer.byteLength);
+		return this._byteSize == this._dataBuffer.byteLength;
 	}
 	return false;
-}
-
-Volume.prototype.getNumberOfVoxels = function(){
-	return this.width * this.height * this.depth;
-}
-
-//Can accept both absolute i and (i, j, k)
-Volume.prototype.getVoxel = function(i, j, k){
-	if(j != undefined && k != undefined){
-		i = i + this.width*j + this.width*this.height*k;
-	}
-
-	i = i * this._voxelDepthBytes;
-	voxel = [];
-
-	var voxelDepthBytesPerChannel = this._voxelDepthBytes / this.channels;
-	for(var c=0; c<this.channels; c++){
-		voxel.push(this._dataView[i+c]);
-	}
-
-	return voxel;
 }
 
 Volume.prototype.getDataTexture = function(){
 	if(!this.isValid()) return false;
 
+	var internalFormat = gl.R8;
+	var format = gl.RED;
+	var type = gl.UNSIGNED_BYTE;
+
+	if(this.voxelDepth == 16){
+		internalFormat = gl.R16F;
+		format = gl.RED;
+		type = gl.HALF_FLOAT;
+	}else if(this.voxelDepth == 32){
+		internalFormat = gl.R32F;
+		format = gl.RED;
+		type = gl.FLOAT;
+	}
+
 	if(this._dataTexture == null){
-		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, pixel_data: this._dataView, texture_type: GL.TEXTURE_3D, format: gl.LUMINANCE, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE, no_flip: false, premultiply_alpha: false});
-		//litegl does not handle wrap for Z direction - not needed because shader stops outside volume
-		//gl.activeTexture( gl.TEXTURE0 + Texture.MAX_TEXTURE_IMAGE_UNITS - 1);
-		//gl.bindTexture( this._dataTexture.texture_type, this._dataTexture.handler);
-		//gl.texParameteri( this._dataTexture.texture_type, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE );
-		//gl.bindTexture(this._dataTexture.texture_type, null); //disable
-		//gl.activeTexture(gl.TEXTURE0);
+		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, pixel_data: this._dataView, texture_type: GL.TEXTURE_3D, format: format, internalFormat: internalFormat, type: type, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE});
 	}
 
 	return this._dataTexture;
 }
 
+Volume.prototype.uploadDataTexture = function(){
+	if(this._dataTexture == null){
+		this.getDataTexture();
+	}else{
+		this._dataTexture.uploadData(this._dataView, {}, false);
+	}
+}
+
+Volume.prototype.computeMinMax = function(){
+	if(this._max != null && this._min != null) return;
+
+	var min = Math.pow(2,this.voxelDepth);
+	var max = -min;
+
+	for(var i=0; i<this._voxelSize; i++){
+		var v = this._dataView[i];
+		if(v < min) min = v;
+		if(v > max) max = v;
+	}
+
+	this._max = max;
+	this._min = min;
+}
+
+Volume.prototype.normalize = function(){
+	this.computeMinMax();
+
+	var min = this._min;
+	var max = this._max;
+	var mmm = max - min;
+	var lim = Math.pow(2,this.voxelDepth);
+
+	for(var i=0; i<this._voxelSize; i++){
+		var v = this._dataView[i];
+		
+		this._dataView[i] = lim * (v - min)/mmm;
+	}
+}
+
 Volume.prototype.computeHistogram = function(c){
 	if(!this.isValid()) return;
-	if(this.channels == 0){
-		c = 0;
-	}else if(this.channels > 1){
-		if(c == undefined){
-			console.warn("This function only computes 1 channel histogram. Using channel 0.");
-			c = 0;
-		}else if(c >= this.channels){
-			console.error("Provided channel is larger than number of channels. Using channel 0.");
-			c = 0;
-		}
-	}
-	var voxelDepthPerChannel = this.voxelDepth / this.channels;
-	var possibleValues = Math.pow(2, voxelDepthPerChannel);
+	
+	var possibleValues = Math.pow(2, this.voxelDepth);
 
 	//todo check to know best typed array size
 	var h = new Uint32Array(possibleValues);
 
-	for(var i=0; i<this.width; i++){
-		var v = this.getVoxel(i)[c];
+	for(var i=0; i<this._voxelSize; i++){
+		var v = this._dataView[i];
 
 		h[v]++;
 	}
@@ -262,6 +356,60 @@ Volume.loadDLFile = function(file, callback){
 	}
 
 	reader.readAsArrayBuffer(file);
+}
+
+var MedVolume = {};
+MedVolume.loadFile = function(file, parser, callback){
+	var reader = new FileReader();
+	reader.onloadend = function(event){
+		if(event.target.readyState === FileReader.DONE){
+	        var buffer = event.target.result;
+	        parser(buffer, callback);
+	    }
+	}
+	reader.readAsArrayBuffer(file);
+}
+
+MedVolume.loadNiftiFile = function(file, callback){
+	MedVolume.loadFile(file, MedVolume.parseNiftiBuffer, callback);
+}
+
+MedVolume.parseNiftiBuffer = function(buffer, callback){
+	if(nifti === undefined){
+		console.warn("Library nifti-reader.js is needed to perfom this action.");
+		return;
+	}
+
+	var niftiData = buffer;
+
+	var niftiHeader = null,
+    	niftiImage = null;
+
+    if (nifti.isCompressed(niftiData)) {
+    	niftiData = nifti.decompress(niftiData);
+	}
+
+	if (nifti.isNIFTI(niftiData)) {
+	    niftiHeader = nifti.readHeader(niftiData);
+
+	    if(niftiHeader.dims[0] > 3){
+	    	console.warn("Nifti data has more dimensions than 3, using only 3 first dimensions.");
+	    }
+
+	    var width = niftiHeader.dims[1];
+	    var height = niftiHeader.dims[2];
+	    var depth = niftiHeader.dims[3];
+
+	    var widthSpacing = niftiHeader.pixDims[1];
+	    var heightSpacing = niftiHeader.pixDims[2];
+	    var depthSpacing = niftiHeader.pixDims[3];
+
+	    var voxelDepth = niftiHeader.numBitsPerVoxel;
+
+	    var niftiImage = nifti.readImage(niftiHeader, niftiData);
+	    var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelDepth: voxelDepth}, niftiImage);
+	    callback(volume);
+	}
 }
 
 /***
@@ -419,7 +567,7 @@ TFEditor = function TFEditor(options){
 		options.container = document.createElement("div");
 		document.body.appendChild(options.container);
 	}
-	this.container = options.container = options.container;
+	this.container = options.container;
 
 	if(!(options.visible === true || options.visible === false)){
 		options.visible = true;
@@ -432,11 +580,13 @@ TFEditor = function TFEditor(options){
 	this._middle = 0.2;
 	this._r = 5;
 
+	this.ctx = null;
+
 	//Inputs and canvas
 	this.domElements = {};
 	this.initDivs();
 
-	this.ctx = this.domElements.canvas.getContext("2d");
+	
 
 	//State
 	this.state = {
@@ -485,12 +635,18 @@ TFEditor.prototype.setSize = function(w, h){
 	}
 }
 
-TFEditor.prototype.initDivs = function(){
-	while(this.container.lastChild){
-		this.container.removeChild(this.container.lastChild);
-	}
-
+TFEditor.prototype.removeDivs = function(){
 	this.domElements = {};
+	if(this.container){
+		while(this.container.lastChild){
+			this.container.removeChild(this.container.lastChild);
+		}
+	}
+}
+
+TFEditor.prototype.initDivs = function(newcontainer){
+	this.domElements = {};
+	this.container = newcontainer || this.container;
 
 	var canvas = document.createElement("canvas");
 	canvas.style.width = "100%";
@@ -505,6 +661,7 @@ TFEditor.prototype.initDivs = function(){
 	canvas.addEventListener("mouseup", this._onMouseUp.bind(this));
 	canvas.addEventListener("mousemove", this._onMouseMove.bind(this));
 	canvas.addEventListener("mouseleave", this._onMouseLeave.bind(this));
+	this.ctx = this.domElements.canvas.getContext("2d");
 
 	for(var c of ["r", "g", "b", "a"]){
 		var div = document.createElement("div");
@@ -549,7 +706,7 @@ TFEditor.prototype.initDivs = function(){
 		slider.addEventListener("input", this._onSliderChange.bind(this));
 	}
 
-	this.disableInputs();
+	this.disableInputs(true);
 	this.setSize();
 }
 
@@ -803,6 +960,7 @@ VolumeNode.prototype._ctor = function(){
 	this.intensity = 1;
 	this.levelOfDetail = 100;
 	this.isosurfaceLevel = 0.5;
+	this.voxelScaling = 1;
 
 	this.mesh = "proxy_box";
 	this.textures.jittering = "_jittering";
@@ -882,6 +1040,15 @@ Object.defineProperty(VolumeNode.prototype, "isosurfaceLevel", {
 	},
 });
 
+Object.defineProperty(VolumeNode.prototype, "voxelScaling", {
+	get: function() {
+		return this.uniforms.u_voxelScaling;
+	},
+	set: function(v) {
+		this.uniforms.u_voxelScaling = v;
+	},
+});
+
 VolumeNode.prototype.hide = function(){
 	this.flags.visible = false;
 }
@@ -956,12 +1123,15 @@ Volumetrics = function Volumetrics(options){
 		fbo: null,
 	};
 
+	this.fps = 0;
+
 	this.background = options.background;
 	this.levelOfDetail = options.levelOfDetail;
 
 	this.visible = options.visible;
 
 	this.init();
+
 }
 
 //It may not work if the window size does not change, so call it manually if you change the container size
@@ -1026,17 +1196,19 @@ Volumetrics.prototype.init = function(){
 	gl.captureKeys();
 	this.renderer.context.onkey = this.onkey.bind(this);
 
-	//Global shader uniforms - not needed at the moment
-	//this.renderer.setGlobalUniforms({
-	//	"u_eye": this.camera.position,
-	//});
-
 	//Init visibility
 	if(this.visible){
 		this.show();
 	}else{
 		this.hide();
 	}
+
+	//setInterval(this.showFPS.bind(this), 1000);
+}
+
+Volumetrics.prototype.showFPS = function(){
+	console.log(this.fps);
+	this.fps = 0;
 }
 
 Volumetrics.prototype.onmousedown = function(e){
@@ -1059,6 +1231,8 @@ Volumetrics.prototype.onkey = function(e){
 }
 
 Volumetrics.prototype.update = function(dt){
+	this.fps++;
+
 	//Update tfs textures
 	for(var k of Object.keys(this.tfs)){
 		this.tfs[k].update();
@@ -1195,12 +1369,30 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 	volNode.background = this.background;
 	volNode.levelOfDetail = this.levelOfDetail;
 
-	var v = this.volumes[volNode.volume];
-	volNode.scaling = [v.width*v.widthSpacing, v.height*v.heightSpacing, v.depth*v.depthSpacing];
-	volNode.resolution = [v.width, v.height, v.depth];
+	var vol = this.volumes[volNode.volume];
+	volNode.scaling = [vol.width*vol.widthSpacing, vol.height*vol.heightSpacing, vol.depth*vol.depthSpacing];
+	volNode.resolution = [vol.width, vol.height, vol.depth];
+	if(vol.voxelDepth == 16 || vol.voxelDepth == 32){
+		volNode.voxelScaling = Math.pow(2,vol.voxelDepth);
+	}else{
+		volNode.voxelScaling = 1;
+	}
 
-	this.volumeNodes[name] = volNode;
-	this.scene._root.addChild(volNode);
+	if( this.volumeNodes[name] === undefined ){
+		this.volumeNodes[name] = volNode;
+		this.scene._root.addChild(volNode);
+	}else{
+		var oldVolumeNode = this.volumeNodes[name];
+		for(var i=0; i<this.scene._root.children.length; i++){
+			if(this.scene._root.children[i] == oldVolumeNode){
+				this.scene._root.children[i] = volNode;
+			}
+		}
+	}
+}
+
+Volumetrics.prototype.getVolumeNode = function(name){
+	return this.volumeNodes[name];
 }
 
 //Creates an FBO if there is none or if canvas size has changed. Returns the fbo
@@ -1298,4 +1490,3 @@ Object.defineProperty(Volumetrics.prototype, "levelOfDetail", {
 		}
 	},
 });
-

@@ -16,8 +16,16 @@
     <div>
         <p>DICOM</p>
         <p>Dicom folder: <input id="folderInput" type="file" webkitdirectory directory multiple/></p>
+        <p>Nifti file (.nii):<input id="niiInput" type="file"/></p>
         <p>Volume data (.vl):<input id="vlInput" type="file"/></p>
         <p>Example (100MB):<button id="vlExample">Download</button></p>
+    </div>
+
+    <div>
+        <p>Math</p>
+        <input id="mathON" type="checkbox">
+        <input id="mathFunc" type="text">
+        <button id="mathSet">Set</button>
     </div>
 
     <div id=visualizer style="height: 90%;">
@@ -35,8 +43,12 @@
 <script src="../src/lib/gl-matrix.js"></script>
 <script src="../src/lib/litegl.js"></script>
 <script src="../src/lib/rendeer.js"></script>
+
+<script src="../src/lib/nifti-reader.js"></script>
+
 <script src="../src/volumetrics.js"></script>
 
+<script src="lib/mathjs.js"></script>
 <script src="lib/daikon.js"></script>
 <script src="lib/dicomLoader.js"></script>
 
