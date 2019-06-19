@@ -163,7 +163,7 @@ var mathSetDimensions = function(width, height, depth, bytes){
 }
 
 var onMathONOFF = function(event){
-    if(mathONInput.value == false){
+    if(mathONInput.checked == false){
         app.math.node.hide();
     }else{
         app.math.node.show();
