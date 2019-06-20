@@ -495,7 +495,7 @@ VolumeLoader.parseDicomBuffers = async function(buffers, onend, oninfo){
 
 	//Extract images from dicoms and assign each to a serie
 	for(var buffer of buffers){
-		var image = daikon.Series.parseImage(new DataView(event.target.result))
+		var image = daikon.Series.parseImage(new DataView(buffer))
 
 		if(image !== null && image.hasPixelData()){
 			var seriesId = image.getSeriesId();
@@ -1246,6 +1246,16 @@ VolumeNode.prototype.render = function(renderer, camera){
 	renderer.renderNode( this, camera );
 }
 
+VolumeNode.prototype.setVolumeUniforms = function(volume){
+	this.scaling = [volume.width*volume.widthSpacing, volume.height*volume.heightSpacing, volume.depth*volume.depthSpacing];
+	this.resolution = [volume.width, volume.height, volume.depth];
+	if(volume.voxelDepth == 16 || volume.voxelDepth == 32){
+		this.voxelScaling = Math.pow(2,volume.voxelDepth);
+	}else{
+		this.voxelScaling = 1;
+	}
+}
+
 Object.defineProperty(VolumeNode.prototype, "volume", {
 	get: function() {
 		return this.textures.volume;
@@ -1591,6 +1601,17 @@ Volumetrics.prototype.hide = function(){
 
 Volumetrics.prototype.addVolume = function(volume, name){
 	name = name || ("volume_" + Object.keys(this.volumes).length);
+
+	if(this.volumes[name] !== undefined){
+		for(var v in this.volumeNodes){
+			var volNode = this.volumeNodes[v];
+
+			if(volNode.volume == name){
+				volNode.setVolumeUniforms(volume);
+			}
+		}
+	}
+
 	this.volumes[name] = volume;
 	this.renderer.textures[name] = volume.getDataTexture();
 }
@@ -1638,14 +1659,8 @@ Volumetrics.prototype.addVolumeNode = function(volNode, name){
 	volNode.background = this.background;
 	volNode.levelOfDetail = this.levelOfDetail;
 
-	var vol = this.volumes[volNode.volume];
-	volNode.scaling = [vol.width*vol.widthSpacing, vol.height*vol.heightSpacing, vol.depth*vol.depthSpacing];
-	volNode.resolution = [vol.width, vol.height, vol.depth];
-	if(vol.voxelDepth == 16 || vol.voxelDepth == 32){
-		volNode.voxelScaling = Math.pow(2,vol.voxelDepth);
-	}else{
-		volNode.voxelScaling = 1;
-	}
+	var volume = this.volumes[volNode.volume];
+	volNode.setVolumeUniforms(volume);
 
 	if( this.volumeNodes[name] === undefined ){
 		this.volumeNodes[name] = volNode;
