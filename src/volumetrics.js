@@ -1,3 +1,5 @@
+"use strict"
+
 /***
  * === VOLUMETRICS.js ===
  * v1.0
@@ -70,7 +72,7 @@ Utils.uint16ArrayToHalf = function(view){
  * ==Volume class==
  * Describes a 3D dataset
  ***/
-Volume = function Volume(){
+var Volume = function Volume(){
 	//Length of dimensions
 	this.width = 0;
 	this.height = 0;
@@ -285,138 +287,406 @@ Volume.prototype.downloadVL = function(){
 	document.body.removeChild(element);
 };
 
-Volume._loadVL1Buffer = function(buffer, view32, view32F){
+/***
+ * ==Volume class==
+ * Loads Volume objects from VL, Dicom or Nifti
+ ***/
+var VolumeLoader = {};
+
+VolumeLoader.STARTING = 0;
+VolumeLoader.LOADINGFILES = 1;
+VolumeLoader.PARSINGFILES = 2;
+VolumeLoader.CREATINGVOLUMES = 3;
+VolumeLoader.DONE = 4;
+VolumeLoader.ERROR = 5;
+
+//Dicom utils
+VolumeLoader.DicomUtils = {};
+VolumeLoader.DicomUtils.TAGS = {};
+VolumeLoader.DicomUtils.TAGS.modality 			= "00080060";
+VolumeLoader.DicomUtils.TAGS.studyDescription 	= "00081030";
+VolumeLoader.DicomUtils.TAGS.MRAcquisitionType = "00180023"; //[1D, 2D, 3D]
+VolumeLoader.DicomUtils.TAGS.rows 				= "00280010"; //# of rows
+VolumeLoader.DicomUtils.TAGS.columns 			= "00280011"; //# of columns
+VolumeLoader.DicomUtils.TAGS.slices			= "00201002"; //# of images AKA slices, not allways defined!
+VolumeLoader.DicomUtils.TAGS.pixelSpacing 		= "00280030"; //mm between 2 centers of pixels. Value[0] is for pixels in 2 adjacent rows and value[1] is for pixels in 2 djacent columns
+VolumeLoader.DicomUtils.TAGS.sliceThickness	= "00180050"; //mm between 2 centers of pixels in adjacent slices
+VolumeLoader.DicomUtils.TAGS.samplesPerPixel 			= "00280002"; //[ 1				, 1				, 3		, 3			, 3				, 3			, 3			, 3					]
+VolumeLoader.DicomUtils.TAGS.photometricInterpretation = "00280004"; //[MONOCHROME2	, PALETTE COLOR	, RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
+VolumeLoader.DicomUtils.TAGS.photometricInterpretationOptions = ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT", "YBR_ICT", "YBR_PARTIAL_420"];
+
+//Returns an array of values. Usually only contains 1 value inside the array. => Check Dicom Standard
+VolumeLoader.DicomUtils.getValue = function(image, tag){
+	if(image.tags[tag])
+		return image.tags[tag].value;
+	return null;
+}
+
+VolumeLoader.loadFile = function(file, callback){
+	var reader = new FileReader();
+	reader.onloadend = function(event){
+		if(event.target.readyState === FileReader.DONE){
+	        var buffer = event.target.result;
+	        callback(buffer);
+	    }
+	}
+	reader.readAsArrayBuffer(file);
+}
+
+VolumeLoader.loadVLFiles = async function(files, onend, oninfo){
+	var response = {};	//Info like progress to provide to callback while is parsing and creating Volumes
+	
+	response.status = VolumeLoader.STARTING;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+
+	var currentFile = 0;
+	var totalFiles = files.length;
+
+	var buffers = [];
+
+	function readFile(){
+		if(currentFile < totalFiles){
+			VolumeLoader.loadFile(files[currentFile++], onFileLoaded);
+		}else{
+			VolumeLoader.parseVLBuffers(buffers, onend, oninfo);
+		}
+	}
+
+	function onFileLoaded(buffer){
+		buffers.push(buffer);
+		readFile();
+	}
+
+	response.status = VolumeLoader.LOADINGFILES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+	readFile();
+}
+
+VolumeLoader.parseVLBuffers = async function(buffers, onend, oninfo){
+	var response = {};	//Info like progress to provide to callback while is parsing and creating Volumes
+
+	response.status = VolumeLoader.PARSINGFILES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+
+	var vls = [];
+	var volumes = [];
+
+	for(var buffer of buffers){
+		var vl = VolumeLoader.parseVL(buffer);
+
+		if(vl.data){
+			vl.buffer = buffer;
+			vls.push(vl);
+		}else{
+			response.status = VolumeLoader.ERROR;
+			response.explanation = "Could not parse VL file with version " + vl.version;
+	    	oninfo(response);
+		}
+	}
+
+	if(vls.length == 0){
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "There are no valid VLs.";
+	    onend(response);
+	    return;
+	}
+
+	//Create a volume for each volume
+	response.status = VolumeLoader.CREATINGVOLUMES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+
+	for(var vl of vls){
+		var volume = Volume.create(vl.width, vl.height, vl.depth, {widthSpacing: vl.widthSpacing, heightSpacing: vl.heightSpacing, depthSpacing: vl.depthSpacing, channels: vl.channels, voxelDepth: vl.voxelDepth}, vl.data);
+		vl.volume = volume;
+		volumes.push(volume);
+	}
+
+	response.status = VolumeLoader.DONE;
+	response.vls = vls;
+	response.volume = volumes[0];
+	response.volumes = volumes;
+
+	onend(response);	//Final callback, it does contain volumes (and also raw images and series from daikon)
+}
+
+VolumeLoader.parseVL = function(buffer){
+	var view32 = new Uint32Array(buffer);
+	var view32F = new Float32Array(buffer);
+	var vl = {
+		version: view32[0],
+	};
+
+	if(vl.version == 1){
+		vl = VolumeLoader._parseVL1(buffer, view32, view32F);
+	}
+
+	return vl;
+}
+
+VolumeLoader._parseVL1 = function(buffer, view32, view32F){
 	var headerElements = 9;
-	var width = view32[1];
-	var height = view32[2];
-	var depth = view32[3];
-	var widthSpacing = view32F[4];
-	var heightSpacing = view32F[5];
-	var depthSpacing = view32F[6];
-	var channels = view32[7];
-	var voxelDepth = view32[8];
-	var dataBuffer = buffer.slice(4*headerElements);
-	var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, channels: channels, voxelDepth: voxelDepth}, dataBuffer);
-	return volume;
+	var vl = {};
+	vl.version = view32[0];
+	vl.width = view32[1];
+	vl.height = view32[2];
+	vl.depth = view32[3];
+	vl.widthSpacing = view32F[4];
+	vl.heightSpacing = view32F[5];
+	vl.depthSpacing = view32F[6];
+	vl.channels = view32[7];
+	vl.voxelDepth = view32[8];
+	vl.data = buffer.slice(4*headerElements);
+	return vl;
 }
 
-Volume.loadVLBuffer = function(buffer, callback){
-	var view32 = new Uint32Array(buffer);
-	var view32F = new Float32Array(buffer);
-	var version = view32[0];
-	if(version == 1){
-		callback( Volume._loadVL1Buffer(buffer, view32, view32F) );
-	}else{
-		console.log("Version of VL file not supported.")
-	}
-}
-
-Volume.loadVLFile = function(file, callback){
-	var reader = new FileReader();
-
-	reader.onloadend = function(event){
-		if(event.target.readyState === FileReader.DONE){
-	        var buffer = event.target.result;
-	        Volume.loadVLBuffer(buffer, callback);
-	    }
-	}
-
-	reader.readAsArrayBuffer(file);
-};
-
-//Deprecated
-Volume.loadDLBuffer = function(buffer, callback){
-	var view32 = new Uint32Array(buffer);
-	var view32F = new Float32Array(buffer);
+VolumeLoader.loadDicomFiles = async function(files, onend, oninfo){
+	var response = {};	//Info like progress to provide to callback while is parsing and creating Volumes
 	
-	var headerElements = 8;
-	var width = view32[0];
-	var height = view32[1];
-	var depth = view32[2];
-	var channels = view32[3];
-	var voxelDepth = 8;
-	var widthSpacing = view32F[5];
-	var heightSpacing = view32F[6];
-	var depthSpacing = view32F[7];
-	var dataBuffer = buffer.slice(4*headerElements);
-	
-	var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, channels: channels, voxelDepth: voxelDepth}, dataBuffer);
-	
-	callback( volume );
-}
-
-Volume.loadDLFile = function(file, callback){
-	var reader = new FileReader();
-
-	reader.onloadend = function(event){
-		if(event.target.readyState === FileReader.DONE){
-	        var buffer = event.target.result;
-	        Volume.loadDLBuffer(buffer, callback);
-	    }
+	if(daikon === undefined){
+		console.warn("Library daikon.js is needed to perfom this action.");
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "Library daikon.js is needed to perfom this action."
+	    onend(response);
+	    return;
 	}
 
-	reader.readAsArrayBuffer(file);
-}
+	response.status = VolumeLoader.STARTING;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
 
-var MedVolume = {};
-MedVolume.loadFile = function(file, parser, callback){
-	var reader = new FileReader();
-	reader.onloadend = function(event){
-		if(event.target.readyState === FileReader.DONE){
-	        var buffer = event.target.result;
-	        parser(buffer, callback);
-	    }
+	var currentFile = 0;
+	var totalFiles = files.length;
+
+	var buffers = [];
+
+	function readFile(){
+		if(currentFile < totalFiles){
+			VolumeLoader.loadFile(files[currentFile++], onFileLoaded);
+		}else{
+			VolumeLoader.parseDicomBuffers(buffers, onend, oninfo);
+		}
 	}
-	reader.readAsArrayBuffer(file);
+
+	function onFileLoaded(buffer){
+		buffers.push(buffer);
+		readFile();
+	}
+
+	response.status = VolumeLoader.LOADINGFILES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+	readFile();
 }
 
-MedVolume.loadNiftiFile = function(file, callback){
-	MedVolume.loadFile(file, MedVolume.parseNiftiBuffer, callback);
+VolumeLoader.parseDicomBuffers = async function(buffers, onend, oninfo){
+	var response = {};	//Info like progress to provide to callback while is parsing and creating Volumes
+
+	if(daikon === undefined){
+		console.warn("Library daikon.js is needed to perfom this action.");
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "Library daikon.js is needed to perfom this action."
+	    onend(response);
+	    return;
+	}
+
+	response.status = VolumeLoader.PARSINGFILES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+
+	var series = {};	//Map seriesId of image with a serie
+	var volumes = [];	//Contains a volume for each serie
+
+	//Extract images from dicoms and assign each to a serie
+	for(var buffer of buffers){
+		var image = daikon.Series.parseImage(new DataView(event.target.result))
+
+		if(image !== null && image.hasPixelData()){
+			var seriesId = image.getSeriesId();
+			if(!series[seriesId]){
+				series[seriesId] = new daikon.Series();
+				series[seriesId].buffers = [];
+				series[seriesId].volume = null;
+			}
+
+			series[seriesId].addImage(image);
+			series[seriesId].buffers.push(buffer);
+		}
+	}
+
+	if(Object.keys(series).length == 0){
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "There are no valid Dicoms.";
+	    onend(response);
+	    return;
+	}
+
+	//Create a volume for each serie
+	response.status = VolumeLoader.CREATINGVOLUMES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+	for(var seriesId in series){
+		var serie = series[seriesId];
+
+		serie.buildSeries();
+
+		var width  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.rows)[0];
+		var height = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.columns)[0];
+		var depth  = serie.images.length;
+
+		var widthSpacing  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.pixelSpacing)[0] || 1;
+		var heightSpacing = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.pixelSpacing)[1] || 1;
+		var depthSpacing  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.sliceThickness)[0] || 1;
+
+		var channels = 1;	//TODO
+		var voxelDepth = 8; //TODO
+		var voxelBytes = voxelDepth/8;
+
+		var totalVoxels = width * height * depth;
+		var totalBytes = totalVoxels * voxelBytes;
+		var sliceValues = width * height * channels;
+
+		var voxelData = new ArrayBuffer(totalBytes);
+		var view = new Uint8Array(voxelData);	//TODO depending of voxelDepth and data type
+
+		for(var i=0; i<depth; i++){
+			var image = serie.images[i];
+			var imageData = image.getInterpretedData(true);
+			view.set(imageData, i * sliceValues);
+		}
+
+		var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelDepth: voxelDepth, channels: channels}, voxelData);
+		serie.volume = volume;
+		volumes.push(volume);
+	}
+
+	response.status = VolumeLoader.DONE;
+	response.series = series;
+	response.volume = volumes[0];
+	response.volumes = volumes;
+
+	onend(response);	//Final callback, it does contain volumes (and also raw images and series from daikon)
 }
 
-MedVolume.parseNiftiBuffer = function(buffer, callback){
+VolumeLoader.loadNiftiFiles = function(files, onend, oninfo){
+	var response = {};	//Info like progress to provide to callback while is parsing and creating Volumes
+	
 	if(nifti === undefined){
 		console.warn("Library nifti-reader.js is needed to perfom this action.");
-		return;
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "Library nifti-reader.js is needed to perfom this action."
+	    onend(response);
+	    return;
 	}
 
-	var niftiData = buffer;
+	response.status = VolumeLoader.STARTING;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
 
-	var niftiHeader = null,
-    	niftiImage = null;
+	var currentFile = 0;
+	var totalFiles = files.length;
 
-    if (nifti.isCompressed(niftiData)) {
-    	niftiData = nifti.decompress(niftiData);
+	var buffers = [];
+
+	function readFile(){
+		if(currentFile < totalFiles){
+			VolumeLoader.loadFile(files[currentFile++], onFileLoaded);
+		}else{
+			VolumeLoader.parseNiftiBuffers(buffers, onend, oninfo);
+		}
 	}
 
-	if (nifti.isNIFTI(niftiData)) {
-	    niftiHeader = nifti.readHeader(niftiData);
-
-	    if(niftiHeader.dims[0] > 3){
-	    	console.warn("Nifti data has more dimensions than 3, using only 3 first dimensions.");
-	    }
-
-	    var width = niftiHeader.dims[1];
-	    var height = niftiHeader.dims[2];
-	    var depth = niftiHeader.dims[3];
-
-	    var widthSpacing = niftiHeader.pixDims[1];
-	    var heightSpacing = niftiHeader.pixDims[2];
-	    var depthSpacing = niftiHeader.pixDims[3];
-
-	    var voxelDepth = niftiHeader.numBitsPerVoxel;
-
-	    var niftiImage = nifti.readImage(niftiHeader, niftiData);
-	    var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelDepth: voxelDepth}, niftiImage);
-	    callback(volume);
+	function onFileLoaded(buffer){
+		buffers.push(buffer);
+		readFile();
 	}
+
+	response.status = VolumeLoader.LOADINGFILES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+	readFile();
+}
+
+VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
+	var response = {};	//Info like progress to provide to callback while is parsing and creating Volumes
+	
+	if(nifti === undefined){
+		console.warn("Library nifti-reader.js is needed to perfom this action.");
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "Library nifti-reader.js is needed to perfom this action."
+	    onend(response);
+	    return;
+	}
+
+	response.status = VolumeLoader.PARSINGFILES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+
+	var niftis = [];	//Contains all nifti objects
+	var volumes = [];	//Contains a volume for each serie
+
+	for(var buffer of buffers){
+		var niftiData = buffer;
+		var niftiHeader = null;
+
+    	if (nifti.isCompressed(niftiData)) {
+    		niftiData = nifti.decompress(niftiData);
+		}
+
+		if (nifti.isNIFTI(niftiData)) {
+		    niftiHeader = nifti.readHeader(niftiData);
+
+		    niftis.push({
+		    	niftiHeader: niftiHeader,
+		    	buffer: buffer,
+		    	volume: null,
+		    });
+		}else{
+			response.status = VolumeLoader.ERROR;
+			response.explanation = "Nifti file does not contain data."
+	    	onend(response);
+		}
+	}
+
+	if(niftis.length == 0){
+		response.status = VolumeLoader.ERROR;
+		response.explanation = "There are no valid Niftis.";
+	    onend(response);
+	    return;
+	}
+
+	response.status = VolumeLoader.CREATINGVOLUMES;
+	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
+
+	for(var nii of niftis){
+		var niftiHeader = nii.niftiHeader;
+		var niftiData = nii.buffer;
+
+		if(niftiHeader.dims[0] > 3){
+		    console.warn("Nifti data has more dimensions than 3, using only 3 first dimensions.");
+		}
+
+		var width 	= niftiHeader.dims[1];
+		var height 	= niftiHeader.dims[2];
+		var depth 	= niftiHeader.dims[3];
+
+		var widthSpacing 	= niftiHeader.pixDims[1];
+		var heightSpacing 	= niftiHeader.pixDims[2];
+		var depthSpacing 	= niftiHeader.pixDims[3];
+
+		var voxelDepth 	= niftiHeader.numBitsPerVoxel;
+		var voxelData 	= nifti.readImage(niftiHeader, niftiData);
+
+		var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelDepth: voxelDepth}, voxelData);
+		nii.volume = volume;
+		volumes.push(volume);
+	}
+
+	response.status = VolumeLoader.DONE;
+	response.niftis = niftis;
+	response.volume = volumes[0];
+	response.volumes = volumes;
+
+	onend(response);	//Final callback, it does contain volumes (and also raw nifti)
 }
 
 /***
  * ==TransferFunction class==
  * Represents a TransferFunction composed by segments
  ***/
-TransferFunction = function TransferFunction(){
+var TransferFunction = function TransferFunction(){
 	this.width = 256;
 
 	//RGBA points
@@ -463,9 +733,8 @@ TransferFunction.prototype.initTransferFunction = function(){
 
 TransferFunction.prototype.updateTransferFunction = function(){
 	//Fill buffer data
-	var i = 0;
-	var r = g = b = a = 0;
-	var t = 0;
+	var i, t, r, g, b, a;
+	i = t = r = g = b = a = 0;
 	var points = this.points;
 
 	for(var pos=0; pos<4*this.width; pos+=4){
@@ -560,7 +829,7 @@ TransferFunction.prototype.updateTexture = function(){
 /***
  * ==TransferFunction Editor Widget==
  ***/
-TFEditor = function TFEditor(options){
+var TFEditor = function TFEditor(options){
 	options = options || {};
 
 	if(!options.container){
@@ -926,7 +1195,7 @@ TFEditor.prototype.drawTF = function(){
 		if(p == this.state.selected) ctx.strokeStyle = "rgb(255,255,255)";
 		else ctx.strokeStyle = "rgb(0,0,0)";
 
-		x = p.x * w;
+		var x = p.x * w;
 		ctx.beginPath();
 		ctx.ellipse(x,hh,radius,radius,0,0,pi2);
 		ctx.fill();
@@ -949,7 +1218,7 @@ TFEditor.prototype.render = function(){
  * ==VolumeNode class==
  * Represents volume + tf + shader
  ***/
-VolumeNode = function VolumeNode(){
+var VolumeNode = function VolumeNode(){
 	this._ctor();
 }
 
@@ -1066,7 +1335,7 @@ extendClass( VolumeNode, RD.SceneNode );
  *
  * Useful options: canvas, container, visible, background, levelOfDetail
  ***/
-Volumetrics = function Volumetrics(options){
+var Volumetrics = function Volumetrics(options){
 	//WebGL Renderer and scene
 	options = options || {};
 	options.container = options.container || document.body;

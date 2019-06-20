@@ -2,8 +2,7 @@
 // DATA
 ///////////////////////////////////////////////////////////////////////////////////////////////
 var app = {
-    dicom: null,
-    image: null,
+    volumes: [],
 
     volumetrics: null,
     tfeditor: null,
@@ -33,52 +32,6 @@ init();
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Tests
 ///////////////////////////////////////////////////////////////////////////////////////////////
-
-function testRender(w, h, d, bytes){
-    var buffer = new ArrayBuffer(w*h*d*bytes);
-    var view, s;
-
-    if(bytes == 1){
-        view = new Uint8Array(buffer);
-        s = 255;
-    }else if(bytes == 2){
-        view = new Float32Array(buffer);
-        s = 1;
-    }else if(bytes == 4){
-        view = new Float32Array(buffer);
-        s = 1;
-    }else{
-        console.log("Bytes value not valid in testRender, it must be 1, 2 or 4.");
-    }
-
-    for(var i=0; i<w; i++){
-        for(var j=0; j<h; j++){
-            for(var k=0; k<d; k++){
-                var x = (i-w/2)/(w/2);
-                var y = (j-h/2)/(h/2);
-                var z = (k-d/2)/(d/2);
-                var val = 1 - (x*x + y*y + z*z)/3;
-                val *= s;
-                view[i + j*w + k*w*h] = val;
-            }
-        }
-    }
-
-    //There is no support for Float16Array in JS
-    //if(bytes == 2){
-    //    view = Utils.uint16ArrayToHalf(view);
-    //}
-
-    var vol = Volume.create(w,h,d,{voxelDepth: bytes*8},buffer);
-    app.volumetrics.addVolume(vol, "testRender");
-
-    var node = new VolumeNode();
-    node.volume = "testRender";
-    node.tf = "mytf";
-    app.volumetrics.addVolumeNode(node, "myvolnode");
-
-}
-//testRender(128, 128, 128, 1);
 
 function testPicking(event){
     if(!testPicking) return;
@@ -129,7 +82,7 @@ var mathInit = function(){
     app.math.node.hide();
     app.volumetrics.addVolumeNode(app.math.node, "mathVolumeNode");
 
-    app.math.func = "1 - (x*x + y*y + z*z)/3";
+    app.math.func = "1 - (x^2 + y^2 + z^2)/3";
     mathFuncInput.value = app.math.func;
 }
 
@@ -224,71 +177,77 @@ mathONInput.addEventListener("click", onMathONOFF, false);
 mathSetButton.addEventListener("click", onMathFuncSet, false);
 
 
-
 ///////////////////////////////////////////////////////////////////////////////////////////////
-// Import Dicom and load Volume
-///////////////////////////////////////////////////////////////////////////////////////////////
-function onDicomImage(image){
-    app.image = image;
-    var vol = Volume.create(image.width, image.height, image.depth, {widthSpacing: image.widthSpacing, heightSpacing: image.heightSpacing, depthSpacing: image.depthSpacing}, image.imageData);
-    onVolume(vol);
-};
-
-function onDicomLoaded(dicom){
-    app.dicom = dicom;
-    DL.texture3d(dicom, onDicomImage);
-};
-
-function handleFolderInput(event){
-    var files = event.target.files;
-
-    if(files.length > 0)
-        DL.load(files, onDicomLoaded);
-};
-
-var folderInput = document.getElementById("folderInput");
-folderInput.addEventListener("change", handleFolderInput, false);
-
-///////////////////////////////////////////////////////////////////////////////////////////////
-// Import custom .vl file and .dl file (deprecated, use vl) and load Volume
+// Import Volumes from files
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-function onVolume(volume){
-    app.volumetrics.addVolume(volume, "myvol");
+function onVolume(response){
+    if(response.status == VolumeLoader.DONE){
+        console.log("Volume loaded.");
 
-    //if(app.volumetrics.volumeNodes["myvolnode"] === undefined){
-    var node = new VolumeNode();
-    node.volume = "myvol";
-    node.tf = "mytf";
-    app.volumetrics.addVolumeNode(node, "myvolnode");
-    //}
+        for(var v of response.volumes){
+            app.volumes.push(v);
+        }
+
+        var volume = response.volume;
+        app.volumetrics.addVolume(volume, "myvol");
+
+        var node = new VolumeNode();
+        node.volume = "myvol";
+        node.tf = "mytf";
+        app.volumetrics.addVolumeNode(node, "myvolnode");
+
+    }else if(response.status == VolumeLoader.ERROR){
+        console.log("Error: ", response.explanation);
+    }else if(response.status == VolumeLoader.STARTING){
+        console.log("Starting...");
+    }else if(response.status == VolumeLoader.LOADINGFILES){
+        console.log("Loading Files...");
+    }else if(response.status == VolumeLoader.PARSINGFILES){
+        console.log("Parsing Volumes...");
+    }else if(response.status == VolumeLoader.CREATINGVOLUMES){
+        console.log("Creating Volumes...");
+    }
 };
 
+//Nifti
 function handleNiiInput(event){
-    var file = event.target.files[0];
-    if(file)
-        MedVolume.loadNiftiFile(file, onVolume);
+    var files = event.target.files;
+    if(files.length > 0)
+        VolumeLoader.loadNiftiFiles(files, onVolume, onVolume);
 };
 var niiInput = document.getElementById("niiInput");
 niiInput.addEventListener("change", handleNiiInput, false);
 
+//Dicom
+function handleDicomInput(event){
+    var files = event.target.files;
+
+    if(files.length > 0)
+        VolumeLoader.loadDicomFiles(files, onVolume, onVolume);
+};
+
+var dicomInput = document.getElementById("dicomInput");
+dicomInput.addEventListener("change", handleDicomInput, false);
+
+//VL
 function handleVLInput(event){
-    var file = event.target.files[0];
-    if(file)
-        Volume.loadVLFile(file, onVolume);
+    var files = event.target.files;
+    if(files.length > 0)
+        VolumeLoader.loadVLFiles(files, onVolume, onVolume);
 };
 var vlInput = document.getElementById("vlInput");
 vlInput.addEventListener("change", handleVLInput, false);
 
 function downloadVLExample(){
-    console.log("Downloading example.");
+    console.log("Downloading example...");
     fetch("https://webglstudio.org/users/mfloriach/volumetrics/demo/texture3d.vl")
         .then(function(response) {
             return response.arrayBuffer();
         })
         .then(function(buffer) {
             console.log("Example downloaded.");
-            Volume.loadVLBuffer(buffer, onVolume);
+            VolumeLoader.parseVLBuffers([buffer], onVolume, onVolume);
         });
 };
 var vlExampleButton = document.getElementById("vlExample");
