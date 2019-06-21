@@ -1386,23 +1386,27 @@ var Volumetrics = function Volumetrics(options){
 
 	//State (for inputs)
 	this.state = {
-		focusCamera: true,	//only when true keys and mouse will affect camera
 		mouse:{
+			downx: 0,
+			downy: 0,
+			downpoint: null,
+			x: 0,
+			y: 0,
 			dx: 0,
 			dy: 0,
+			pressed: false,
+			dragging: false,
 		},
-		keyboard:{
-
-		},
-		
+		keyboard:{},
 	};
+	this.activeMode = Volumetrics.MODES.NONE;
 
 	this.picking = {
 		texture: null,
 		fbo: null,
 	};
 
-	this.fps = 0;
+	this._fps = 0;
 
 	this.background = options.background;
 	this.levelOfDetail = options.levelOfDetail;
@@ -1412,6 +1416,14 @@ var Volumetrics = function Volumetrics(options){
 	this.init();
 
 }
+
+Volumetrics.MODES = {};
+Volumetrics.MODES.NONE = 0;
+Volumetrics.MODES.CAMERAPAN = 10;
+Volumetrics.MODES.CAMERAZOOM  = 11;
+Volumetrics.MODES.CAMERAORBIT = 12;
+Volumetrics.MODES.CAMERAROTATION = 13;
+
 
 //It may not work if the window size does not change, so call it manually if you change the container size
 Volumetrics.prototype.onResize = function(){
@@ -1435,7 +1447,6 @@ Volumetrics.prototype.initProxyBox = function(){
 
 
 	this.renderer.meshes["proxy_box"] = GL.Mesh.load(buffers, options);
-	
 }
 
 Volumetrics.prototype.reloadShaders = function(){
@@ -1455,7 +1466,7 @@ Volumetrics.prototype.createJitteringTexture = function(x, y, strength){
 
 Volumetrics.prototype.init = function(){
 	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
-	this.camera.lookAt( [100,100,100], [0,0,0], [0,1,0] );
+	this.camera.lookAt( [1000,1000,1000], [0,0,0], [0,1,0] );
 	this.initProxyBox();
 
 	//Add default tf
@@ -1470,6 +1481,7 @@ Volumetrics.prototype.init = function(){
 	gl.captureMouse();
 	this.renderer.context.onmousedown = this.onmousedown.bind(this);
 	this.renderer.context.onmousemove = this.onmousemove.bind(this);
+	this.renderer.context.onmouseup   = this.onmouseup.bind(this);
 
 	//Key actions
 	gl.captureKeys();
@@ -1482,23 +1494,35 @@ Volumetrics.prototype.init = function(){
 		this.hide();
 	}
 
-	//setInterval(this.showFPS.bind(this), 1000);
+	setInterval(this.computeFPS.bind(this), 1000);
 }
 
-Volumetrics.prototype.showFPS = function(){
-	console.log(this.fps);
-	this.fps = 0;
+Volumetrics.prototype.computeFPS = function(){
+	this.fps = this._fps;
+	this._fps = 0;
 }
 
 Volumetrics.prototype.onmousedown = function(e){
-
+	this.state.mouse.downx = e.canvasx;
+	this.state.mouse.downy = e.canvasy;
+	this.state.mouse.pressed = true;
+	this.state.mouse.downpoint = this.camera.getRayPlaneCollision(this.state.mouse.downx, this.state.mouse.downy, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
 }
 
 Volumetrics.prototype.onmousemove = function(e){
-	if(e.dragging){
+	this.state.mouse.x = e.canvasx;
+	this.state.mouse.y = e.canvasy;
+	this.state.mouse.dragging = e.dragging;
+	if(this.state.mouse.dragging){
 		this.state.mouse.dx += e.deltax;
 		this.state.mouse.dy += e.deltay;
 	}
+}
+
+Volumetrics.prototype.onmouseup = function(e){
+	this.state.mouse.dx = 0;
+	this.state.mouse.dy = 0;
+	this.state.mouse.pressed = false;
 }
 
 Volumetrics.prototype.onkey = function(e){
@@ -1510,57 +1534,52 @@ Volumetrics.prototype.onkey = function(e){
 }
 
 Volumetrics.prototype.update = function(dt){
-	this.fps++;
+	this._fps++;
+
+	var dx = this.state.mouse.dx;
+	var dy = this.state.mouse.dy;
+	this.state.mouse.dx = this.state.mouse.dy = 0;
+
+	switch(this.activeMode){
+		//Update camera
+		case Volumetrics.MODES.CAMERAPAN:
+			if(this.state.mouse.dragging){
+				var delta = [0,0,0];
+				var point = this.camera.getRayPlaneCollision(this.state.mouse.x, this.state.mouse.y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+				vec3.subtract(delta, this.state.mouse.downpoint, point);
+				this.camera.move(delta, 1);
+			}
+			break;
+		case Volumetrics.MODES.CAMERAZOOM:
+			if(this.state.mouse.dragging){
+				var front = this.camera.getFront();
+				vec3.normalize(front, front);
+				this.camera.move(front, -1000 * dt * dy);
+			}
+
+			break;
+		case Volumetrics.MODES.CAMERAORBIT:
+			if(this.state.mouse.dragging){
+				this.camera.orbit(-0.3 * dt * dx, this.camera._top);
+				this.camera.orbit(-0.3 * dt * dy, this.camera._right);
+			}
+			break;
+		case Volumetrics.MODES.CAMERAROTATION:
+			if(this.state.mouse.dragging){
+				this.camera.rotate(-0.3 * dt * dx, this.camera._top);
+				this.camera.rotate(-0.3 * dt * dy, this.camera._right);
+			}
+			break;
+	}
 
 	//Update tfs textures
 	for(var k of Object.keys(this.tfs)){
 		this.tfs[k].update();
-	}	
-
-	//Update camera
-	if(this.state.focusCamera){
-		var front = vec3.clone(this.camera.getFront());
-		var up = vec3.clone(this.camera.up);
-		var right = vec3.clone(this.camera._right);
-
-		vec3.normalize( front, front );
-		vec3.normalize( up, up );
-		vec3.normalize( right, right );
-
-		var pos = vec3.clone(this.camera.position);
-		var target = vec3.clone(this.camera.target);
-
-		var v = dt*(this.state.keyboard.Shift ? 1000 : 100);
-
-		if(this.state.keyboard.w){
-			vec3.add(pos, pos, vec3.scale(front, front, v));
-		}
-
-		if(this.state.keyboard.s){
-			vec3.add(pos, pos, vec3.scale(front, front, -v));
-		}
-
-		if(this.state.keyboard.d){
-			vec3.add(pos, pos, vec3.scale(right, right, v));
-		}
-
-		if(this.state.keyboard.a){
-			vec3.add(pos, pos, vec3.scale(right, right, -v));
-		}
-
-		if(this.state.keyboard.e){
-			vec3.add(pos, pos, vec3.scale(up, up, v));
-		}
-
-		if(this.state.keyboard.q){
-			vec3.add(pos, pos, vec3.scale(up, up, -v));
-		}
-
-		this.camera.position = pos;
 	}
 
 	this.scene.update(dt);
 }
+
 
 Volumetrics.prototype.render = function(){
 	//clear
