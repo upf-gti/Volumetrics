@@ -26,6 +26,8 @@ function init(){
 	app.tfeditor.setTF(tf);
 
     app.volumetrics.addTransferFunction(tf, "mytf");
+
+    app.volumetrics.setPickPositionCallback(testPicking);
 }
 init();
 
@@ -35,6 +37,7 @@ var toolCameraZoom = document.getElementById("toolCameraZoom");
 var toolCameraOrbit = document.getElementById("toolCameraOrbit");
 var toolCameraRotate = document.getElementById("toolCameraRotate");
 var toolCameraReset = document.getElementById("toolCameraReset");
+var toolTestPicking = document.getElementById("toolTestPicking");
 
 toolCameraNone.addEventListener("click", function(){
     app.volumetrics.activeMode = Volumetrics.MODES.NONE;
@@ -60,25 +63,22 @@ toolCameraReset.addEventListener("click", function(){
     app.volumetrics.resetCamera();
 }, false);
 
+toolTestPicking.addEventListener("click", function(){
+    app.volumetrics.activeMode = Volumetrics.MODES.PICKPOSITION;
+}, false);
+
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Tests
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-function testPicking(event){
-    if(!testPicking) return;
-
-    var pickPos = app.volumetrics.pickPosition(event.layerX, app.volumetrics.context.canvas.height-event.layerY);
-    if(pickPos == null) return; //no pick
+function testPicking(position2d, position3d, buttons){
     var sceneNode = new RD.SceneNode();
     sceneNode.mesh = "sphere";
-    sceneNode.position = pickPos;
-    //sceneNode.shader = "debug_surface_depth"
+    sceneNode.position = position3d;
     sceneNode.color = [1, 1, 0];
 
     app.volumetrics.scene._root.addChild(sceneNode);
 }
-/* Enable test picking */
-//app.volumetrics.context.canvas.addEventListener("mouseup", testPicking);
 app.volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
 
 ///////////////////////////////////////////////////////////////////////////////////////////////

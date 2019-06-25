@@ -1409,6 +1409,7 @@ var Volumetrics = function Volumetrics(options){
 	this.picking = {
 		texture: null,
 		fbo: null,
+		callback: null,
 	};
 
 	this._fps = 0;
@@ -1428,6 +1429,7 @@ Volumetrics.MODES.CAMERAPAN = 10;
 Volumetrics.MODES.CAMERAZOOM  = 11;
 Volumetrics.MODES.CAMERAORBIT = 12;
 Volumetrics.MODES.CAMERAROTATE = 13;
+Volumetrics.MODES.PICKPOSITION = 20;
 
 
 //It may not work if the window size does not change, so call it manually if you change the container size
@@ -1533,6 +1535,18 @@ Volumetrics.prototype.onmousemove = function(e){
 }
 
 Volumetrics.prototype.onmouseup = function(e){
+	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
+		var x = this.state.mouse.x;
+		var y = this.state.mouse.y;
+		var position3d = this.pickPosition(x, y);
+		if(position3d != null){
+			var position2d = vec2.create();
+			position2d[0] = x;
+			position2d[1] = y;
+			this.picking.callback(position2d, position3d, {left: this.state.mouse.left, middle: this.state.mouse.middle, right: this.state.mouse.right});
+		}
+	}
+
 	this.state.mouse.left = this.state.mouse.middle = this.state.mouse.right = false;
 	this.state.mouse.dx = 0;
 	this.state.mouse.dy = 0;
@@ -1636,7 +1650,7 @@ Volumetrics.prototype.update = function(dt){
 		this.state.mouse.wheel = 0;
 	}
 
-	if(this.camera.fov < 30) this.camera.fov = 30;
+	if(this.camera.fov < 10) this.camera.fov = 10;
 	else if(this.camera.fov > 100) this.camera.fov = 100;
 
 	
@@ -1837,6 +1851,10 @@ Volumetrics.prototype.pickPosition = function(x, y){
 	fbo.unbind();
 
 	return pick;
+}
+
+Volumetrics.prototype.setPickPositionCallback = function(f){
+	this.picking.callback = f;
 }
 
 Object.defineProperty(Volumetrics.prototype, "background", {
