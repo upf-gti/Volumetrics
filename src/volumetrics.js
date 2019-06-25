@@ -1387,6 +1387,9 @@ var Volumetrics = function Volumetrics(options){
 	//State (for inputs)
 	this.state = {
 		mouse:{
+			left: false,
+			middle: false,
+			right: false,
 			downx: 0,
 			downy: 0,
 			downpoint: null,
@@ -1394,8 +1397,10 @@ var Volumetrics = function Volumetrics(options){
 			y: 0,
 			dx: 0,
 			dy: 0,
+			dwheel: 0,
 			pressed: false,
 			dragging: false,
+			wheel: false,
 		},
 		keyboard:{},
 	};
@@ -1422,7 +1427,7 @@ Volumetrics.MODES.NONE = 0;
 Volumetrics.MODES.CAMERAPAN = 10;
 Volumetrics.MODES.CAMERAZOOM  = 11;
 Volumetrics.MODES.CAMERAORBIT = 12;
-Volumetrics.MODES.CAMERAROTATION = 13;
+Volumetrics.MODES.CAMERAROTATE = 13;
 
 
 //It may not work if the window size does not change, so call it manually if you change the container size
@@ -1464,9 +1469,13 @@ Volumetrics.prototype.createJitteringTexture = function(x, y, strength){
 	this.renderer.textures._jittering = texture;
 }
 
-Volumetrics.prototype.init = function(){
+Volumetrics.prototype.resetCamera = function(){
 	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
 	this.camera.lookAt( [1000,1000,1000], [0,0,0], [0,1,0] );
+}
+
+Volumetrics.prototype.init = function(){
+	this.resetCamera();
 	this.initProxyBox();
 
 	//Add default tf
@@ -1478,10 +1487,11 @@ Volumetrics.prototype.init = function(){
 	this.createJitteringTexture(1024,1024,0.5);
 
 	//Mouse actions
-	gl.captureMouse();
+	gl.captureMouse(true);
 	this.renderer.context.onmousedown = this.onmousedown.bind(this);
 	this.renderer.context.onmousemove = this.onmousemove.bind(this);
-	this.renderer.context.onmouseup   = this.onmouseup.bind(this);
+	this.renderer.context.onmouseup = this.onmouseup.bind(this);
+	this.renderer.context.onmousewheel = this.onmousewheel.bind(this);
 
 	//Key actions
 	gl.captureKeys();
@@ -1503,6 +1513,9 @@ Volumetrics.prototype.computeFPS = function(){
 }
 
 Volumetrics.prototype.onmousedown = function(e){
+	this.state.mouse.left = e.which == 1;
+	this.state.mouse.middle = e.which == 2;
+	this.state.mouse.right = e.which == 3;
 	this.state.mouse.downx = e.canvasx;
 	this.state.mouse.downy = e.canvasy;
 	this.state.mouse.pressed = true;
@@ -1520,9 +1533,16 @@ Volumetrics.prototype.onmousemove = function(e){
 }
 
 Volumetrics.prototype.onmouseup = function(e){
+	this.state.mouse.left = this.state.mouse.middle = this.state.mouse.right = false;
 	this.state.mouse.dx = 0;
 	this.state.mouse.dy = 0;
 	this.state.mouse.pressed = false;
+}
+
+Volumetrics.prototype.onmousewheel = function(e){
+	this.state.mouse.dwheel += e.wheel;
+	this.state.mouse.wheel = true;
+
 }
 
 Volumetrics.prototype.onkey = function(e){
@@ -1538,39 +1558,88 @@ Volumetrics.prototype.update = function(dt){
 
 	var dx = this.state.mouse.dx;
 	var dy = this.state.mouse.dy;
-	this.state.mouse.dx = this.state.mouse.dy = 0;
+	var dw = this.state.mouse.dwheel;
+	this.state.mouse.dx = this.state.mouse.dy = this.state.mouse.dwheel = 0;
 
-	switch(this.activeMode){
-		//Update camera
-		case Volumetrics.MODES.CAMERAPAN:
-			if(this.state.mouse.dragging){
-				var delta = [0,0,0];
-				var point = this.camera.getRayPlaneCollision(this.state.mouse.x, this.state.mouse.y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
-				vec3.subtract(delta, this.state.mouse.downpoint, point);
-				this.camera.move(delta, 1);
-			}
-			break;
-		case Volumetrics.MODES.CAMERAZOOM:
-			if(this.state.mouse.dragging){
-				var front = this.camera.getFront();
-				vec3.normalize(front, front);
-				this.camera.move(front, -1000 * dt * dy);
-			}
 
-			break;
-		case Volumetrics.MODES.CAMERAORBIT:
-			if(this.state.mouse.dragging){
-				this.camera.orbit(-0.3 * dt * dx, this.camera._top);
-				this.camera.orbit(-0.3 * dt * dy, this.camera._right);
-			}
-			break;
-		case Volumetrics.MODES.CAMERAROTATION:
-			if(this.state.mouse.dragging){
-				this.camera.rotate(-0.3 * dt * dx, this.camera._top);
-				this.camera.rotate(-0.3 * dt * dy, this.camera._right);
-			}
-			break;
+	if(this.state.mouse.left){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.CAMERAPAN:
+				if(this.state.mouse.dragging){
+					var delta = [0,0,0];
+					var point = this.camera.getRayPlaneCollision(this.state.mouse.x, this.state.mouse.y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+					vec3.subtract(delta, this.state.mouse.downpoint, point);
+					this.camera.move(delta, 1);
+				}
+				break;
+			case Volumetrics.MODES.CAMERAZOOM:
+				if(this.state.mouse.dragging){
+					this.camera.fov -= 10 * dt * dy;
+				}
+				break;
+			case Volumetrics.MODES.CAMERAORBIT:
+				if(this.state.mouse.dragging){
+					this.camera.orbit(-0.3 * dt * dx, this.camera._top);
+					this.camera.orbit(-0.3 * dt * dy, this.camera._right);
+				}
+				break;
+			case Volumetrics.MODES.CAMERAROTATE:
+				if(this.state.mouse.dragging){
+					this.camera.rotate(-0.3 * dt * dx, this.camera._top);
+					this.camera.rotate(-0.3 * dt * dy, this.camera._right);
+				}
+				break;
+		}
+	}else if(this.state.mouse.middle){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.NONE:
+			case Volumetrics.MODES.CAMERAPAN:
+			case Volumetrics.MODES.CAMERAZOOM:
+			case Volumetrics.MODES.CAMERAORBIT:
+			case Volumetrics.MODES.CAMERAROTATE:
+				if(this.state.mouse.dragging){
+					var delta = [0,0,0];
+					var point = this.camera.getRayPlaneCollision(this.state.mouse.x, this.state.mouse.y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+					vec3.subtract(delta, this.state.mouse.downpoint, point);
+					this.camera.move(delta, 1);
+				}
+				break;
+		}
+	}else if(this.state.mouse.right){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.NONE:
+			case Volumetrics.MODES.CAMERAPAN:
+			case Volumetrics.MODES.CAMERAZOOM:
+			case Volumetrics.MODES.CAMERAORBIT:
+			case Volumetrics.MODES.CAMERAROTATE:
+				if(this.state.mouse.dragging){
+					this.camera.rotate(-0.3 * dt * dx, this.camera._top);
+					this.camera.rotate(-0.3 * dt * dy, this.camera._right);
+				}
+				break;
+		}
+	}else if(this.state.mouse.wheel){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.NONE:
+			case Volumetrics.MODES.CAMERAPAN:
+			case Volumetrics.MODES.CAMERAZOOM:
+			case Volumetrics.MODES.CAMERAORBIT:
+			case Volumetrics.MODES.CAMERAROTATE:
+				this.camera.fov -= 10 * dt * dw;
+				break;
+		}
+
+		this.state.mouse.wheel = 0;
 	}
+
+	if(this.camera.fov < 30) this.camera.fov = 30;
+	else if(this.camera.fov > 100) this.camera.fov = 100;
+
+	
 
 	//Update tfs textures
 	for(var k of Object.keys(this.tfs)){

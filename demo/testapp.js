@@ -29,6 +29,37 @@ function init(){
 }
 init();
 
+var toolCameraNone = document.getElementById("toolCameraNone");
+var toolCameraPan = document.getElementById("toolCameraPan");
+var toolCameraZoom = document.getElementById("toolCameraZoom");
+var toolCameraOrbit = document.getElementById("toolCameraOrbit");
+var toolCameraRotate = document.getElementById("toolCameraRotate");
+var toolCameraReset = document.getElementById("toolCameraReset");
+
+toolCameraNone.addEventListener("click", function(){
+    app.volumetrics.activeMode = Volumetrics.MODES.NONE;
+}, false);
+
+toolCameraPan.addEventListener("click", function(){
+    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAPAN;
+}, false);
+
+toolCameraZoom.addEventListener("click", function(){
+    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAZOOM;
+}, false);
+
+toolCameraOrbit.addEventListener("click", function(){
+    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAORBIT;
+}, false);
+
+toolCameraRotate.addEventListener("click", function(){
+    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAROTATE;
+}, false);
+
+toolCameraReset.addEventListener("click", function(){
+    app.volumetrics.resetCamera();
+}, false);
+
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Tests
 ///////////////////////////////////////////////////////////////////////////////////////////////
