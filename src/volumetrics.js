@@ -305,12 +305,12 @@ VolumeLoader.DicomUtils = {};
 VolumeLoader.DicomUtils.TAGS = {};
 VolumeLoader.DicomUtils.TAGS.modality 			= "00080060";
 VolumeLoader.DicomUtils.TAGS.studyDescription 	= "00081030";
-VolumeLoader.DicomUtils.TAGS.MRAcquisitionType = "00180023"; //[1D, 2D, 3D]
+VolumeLoader.DicomUtils.TAGS.MRAcquisitionType	= "00180023"; //[1D, 2D, 3D]
 VolumeLoader.DicomUtils.TAGS.rows 				= "00280010"; //# of rows
 VolumeLoader.DicomUtils.TAGS.columns 			= "00280011"; //# of columns
-VolumeLoader.DicomUtils.TAGS.slices			= "00201002"; //# of images AKA slices, not allways defined!
+VolumeLoader.DicomUtils.TAGS.slices				= "00201002"; //# of images AKA slices, not allways defined!
 VolumeLoader.DicomUtils.TAGS.pixelSpacing 		= "00280030"; //mm between 2 centers of pixels. Value[0] is for pixels in 2 adjacent rows and value[1] is for pixels in 2 djacent columns
-VolumeLoader.DicomUtils.TAGS.sliceThickness	= "00180050"; //mm between 2 centers of pixels in adjacent slices
+VolumeLoader.DicomUtils.TAGS.sliceThickness		= "00180050"; //mm between 2 centers of pixels in adjacent slices
 VolumeLoader.DicomUtils.TAGS.samplesPerPixel 			= "00280002"; //[ 1				, 1				, 3		, 3			, 3				, 3			, 3			, 3					]
 VolumeLoader.DicomUtils.TAGS.photometricInterpretation = "00280004"; //[MONOCHROME2	, PALETTE COLOR	, RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
 VolumeLoader.DicomUtils.TAGS.photometricInterpretationOptions = ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT", "YBR_ICT", "YBR_PARTIAL_420"];
@@ -380,7 +380,7 @@ VolumeLoader.parseVLBuffers = async function(buffers, onend, oninfo){
 		}else{
 			response.status = VolumeLoader.ERROR;
 			response.explanation = "Could not parse VL file with version " + vl.version;
-	    	oninfo(response);
+			if(oninfo) oninfo(response);
 		}
 	}
 
@@ -914,7 +914,7 @@ TFEditor.prototype.removeDivs = function(){
 }
 
 TFEditor.prototype.initDivs = function(newcontainer){
-	this.domElements = {};
+	this.removeDivs();
 	this.container = newcontainer || this.container;
 
 	var canvas = document.createElement("canvas");
@@ -1064,6 +1064,8 @@ TFEditor.prototype.disableInputs = function(b){
 }
 
 TFEditor.prototype.setInputs = function(p){
+	if(this.tf == null) return null;
+
 	this.disableInputs(false);
 	for(var c of ["r", "g", "b", "a"]){
 		this.domElements["text_"+c].innerText = c + ":" + Math.floor( p[c] * 1000 ) / 1000;
@@ -1072,6 +1074,8 @@ TFEditor.prototype.setInputs = function(p){
 }
 
 TFEditor.prototype.select = function(x){
+	if(this.tf == null) return null;
+
 	var r = this._r / this._width;
 	this.unselect();
 
@@ -1090,6 +1094,8 @@ TFEditor.prototype.unselect = function(){
 }
 
 TFEditor.prototype.moveTo = function(x){
+	if(this.tf == null) return null;
+
 	if(this.state.selected != null){
 		this.state.selected.x = x;
 		this.tf.sort();
@@ -1106,6 +1112,8 @@ TFEditor.prototype.moveTo = function(x){
 }
 
 TFEditor.prototype.create = function(x){
+	if(this.tf == null) return null;
+
 	var transferFunction = this.tf.getTransferFunction();
 
 	var l = this.tf.width - 1;
@@ -1125,6 +1133,8 @@ TFEditor.prototype.create = function(x){
 }
 
 TFEditor.prototype.remove = function(){
+	if(this.tf == null) return null;
+
 	if(this.state.selected != null){
 		this.state.selected.x = -1;
 		this.tf.clean();
@@ -1133,6 +1143,8 @@ TFEditor.prototype.remove = function(){
 }
 
 TFEditor.prototype.modify = function(c, v){
+	if(this.tf == null) return null;
+
 	if(this.state.selected){
 		this.state.selected[c] = v;
 		this.tf._needUpdate = true;
@@ -1140,6 +1152,8 @@ TFEditor.prototype.modify = function(c, v){
 }
 
 TFEditor.prototype.drawTF = function(){
+	if(this.tf == null) return null;
+
 	var w = this._width;
 	var h = this._height;
 
@@ -1208,9 +1222,8 @@ TFEditor.prototype.drawTF = function(){
 TFEditor.prototype.render = function(){
 	if(this.visible){
 		requestAnimationFrame( this.render.bind(this) );
-		if(this.tf){
-			this.drawTF();
-		}
+		this.setSize();
+		this.drawTF();
 	}
 }
 
@@ -1230,17 +1243,47 @@ VolumeNode.prototype._ctor = function(){
 	this.levelOfDetail = 100;
 	this.isosurfaceLevel = 0.5;
 	this.voxelScaling = 1;
+	this.planeUseCameraDirection = true;
 
 	this.mesh = "proxy_box";
+	this.shader = "volumetric_default";
+	this.tf = "tf_default";
 	this.textures.jittering = "_jittering";
 
-	this.uniforms.u_im = mat4.create();
+	this.uniforms.u_local_camera_position = vec3.create();
+
+	this._inverse_matrix = mat4.create();
+	this._planeNormal = vec3.fromValues(1,1,1);
+	this._planePoint  = vec3.create();
 }
 
 VolumeNode.prototype.render = function(renderer, camera){
 	//Update uniforms depending on Volumetrics
 	renderer.setModelMatrix(this._global_matrix);
-	mat4.invert(this.uniforms.u_im, this._global_matrix);
+	mat4.invert(this._inverse_matrix, this._global_matrix);
+
+	var aux_vec4;
+
+	//vec4 homogeneous_ro = u_im * vec4(u_camera_position, 1.0);
+    //vec3 ro = homogeneous_ro.xyz / homogeneous_ro.w;
+    aux_vec4 = vec4.fromValues(camera.position[0], camera.position[1], camera.position[2], 1);
+    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
+    this.uniforms.u_local_camera_position = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+
+    if(this.planeUseCameraDirection){
+    	this._planeNormal = vec3.clone(camera.getFront());
+    	vec3.scale(this._planeNormal, this._planeNormal, -1);
+    }
+
+    aux_vec4 = vec4.fromValues(this._planeNormal[0], this._planeNormal[1], this._planeNormal[2], 1);
+    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
+    var n = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+
+    aux_vec4 = vec4.fromValues(this._planePoint[0], this._planePoint[1], this._planePoint[2], 1);
+    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
+    var p = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+
+    this.uniforms.u_cutting_plane = vec4.fromValues(n[0], n[1], n[2], -n[0]*p[0] - n[1]*p[1] - n[2]*p[2]);
 
 	//Render node
 	renderer.renderNode( this, camera );
@@ -1378,8 +1421,9 @@ var Volumetrics = function Volumetrics(options){
 	this.volumes = {};
 	this.tfs = {};
 
-	//VolumeNode: controller storage. This is reflexed on scene nodes.
+	//Quick access to stored nodes in scene by name
 	this.volumeNodes = {};
+	this.sceneNodes = {};
 
 	//Camera
 	this.camera = new RD.Camera();
@@ -1392,7 +1436,9 @@ var Volumetrics = function Volumetrics(options){
 			right: false,
 			downx: 0,
 			downy: 0,
-			downpoint: null,
+			downcamerapoint: null,
+			downglobalpoint: null,
+			upglobalpoint: null,
 			x: 0,
 			y: 0,
 			dx: 0,
@@ -1405,6 +1451,11 @@ var Volumetrics = function Volumetrics(options){
 		keyboard:{},
 	};
 	this.activeMode = Volumetrics.MODES.NONE;
+
+	this.measure = {
+		first: null,
+		second: null,
+	};
 
 	this.picking = {
 		texture: null,
@@ -1521,7 +1572,19 @@ Volumetrics.prototype.onmousedown = function(e){
 	this.state.mouse.downx = e.canvasx;
 	this.state.mouse.downy = e.canvasy;
 	this.state.mouse.pressed = true;
-	this.state.mouse.downpoint = this.camera.getRayPlaneCollision(this.state.mouse.downx, this.state.mouse.downy, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+	this.state.mouse.downcamerapoint = this.camera.getRayPlaneCollision(this.state.mouse.downx, this.state.mouse.downy, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+	if(this.activeMode == Volumetrics.MODES.MEASURE || (this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback)){
+		var x = this.state.mouse.x;
+		var y = this.state.mouse.y;
+		var position3d = this.pickPosition(x, y);
+		if(position3d != null){
+			var position2d = vec2.create();
+			position2d[0] = x;
+			position2d[1] = y;
+			this.picking.callback(position2d, position3d, {mousedown: true, mouseup: false, left: this.state.mouse.left, middle: this.state.mouse.middle, right: this.state.mouse.right});
+			this.state.mouse.downglobalpoint = position3d;
+		}
+	}
 }
 
 Volumetrics.prototype.onmousemove = function(e){
@@ -1531,6 +1594,15 @@ Volumetrics.prototype.onmousemove = function(e){
 	if(this.state.mouse.dragging){
 		this.state.mouse.dx += e.deltax;
 		this.state.mouse.dy += e.deltay;
+
+		if(this.activeMode == Volumetrics.MODES.MEASURE){
+			var x = this.state.mouse.x;
+			var y = this.state.mouse.y;
+			var position3d = this.pickPosition(x, y);
+			if(position3d != null){
+				this.state.mouse.upglobalpoint = position3d;
+			}
+		}
 	}
 }
 
@@ -1543,7 +1615,8 @@ Volumetrics.prototype.onmouseup = function(e){
 			var position2d = vec2.create();
 			position2d[0] = x;
 			position2d[1] = y;
-			this.picking.callback(position2d, position3d, {left: this.state.mouse.left, middle: this.state.mouse.middle, right: this.state.mouse.right});
+			this.picking.callback(position2d, position3d, {mousedown: false, mouseup: true, left: this.state.mouse.left, middle: this.state.mouse.middle, right: this.state.mouse.right});
+			this.state.mouse.upglobalpoint = position3d;
 		}
 	}
 
@@ -1567,6 +1640,33 @@ Volumetrics.prototype.onkey = function(e){
 	}
 }
 
+Volumetrics.prototype.panCamera = function(targetPoint, x, y){
+	var delta = [0,0,0];
+	var point = this.camera.getRayPlaneCollision(x, y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+	vec3.subtract(delta, targetPoint, point);
+	this.camera.move(delta, 1);
+}
+
+Volumetrics.prototype.zoomCamera = function(d){
+	this.camera.fov += d;
+}
+
+Volumetrics.prototype.orbitCamera = function(dtop, dright){
+	this.camera.orbit(dtop, this.camera._top);
+	var front = this.camera.getFront();
+	var up = vec3.clone(this.camera.up);
+	vec3.normalize(front, front);
+	vec3.normalize(up, up);
+	var d = vec3.dot(front, up);
+	if(!((d > 0.99 && dright > 0) || (d < -0.99 && dright < 0)))
+		this.camera.orbit(dright, this.camera._right);
+}
+
+Volumetrics.prototype.rotateCamera = function(dtop, dright){
+	this.camera.rotate(dtop, this.camera._top);
+	this.camera.rotate(dright, this.camera._right);
+}
+
 Volumetrics.prototype.update = function(dt){
 	this._fps++;
 
@@ -1580,29 +1680,20 @@ Volumetrics.prototype.update = function(dt){
 		switch(this.activeMode){
 			//Update camera
 			case Volumetrics.MODES.CAMERAPAN:
-				if(this.state.mouse.dragging){
-					var delta = [0,0,0];
-					var point = this.camera.getRayPlaneCollision(this.state.mouse.x, this.state.mouse.y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
-					vec3.subtract(delta, this.state.mouse.downpoint, point);
-					this.camera.move(delta, 1);
-				}
+				if(this.state.mouse.dragging)
+					this.panCamera(this.state.mouse.downcamerapoint, this.state.mouse.x, this.state.mouse.y);
 				break;
 			case Volumetrics.MODES.CAMERAZOOM:
-				if(this.state.mouse.dragging){
-					this.camera.fov -= 10 * dt * dy;
-				}
+				if(this.state.mouse.dragging)
+					this.zoomCamera(-10 * dt * dy);
 				break;
 			case Volumetrics.MODES.CAMERAORBIT:
-				if(this.state.mouse.dragging){
-					this.camera.orbit(-0.3 * dt * dx, this.camera._top);
-					this.camera.orbit(-0.3 * dt * dy, this.camera._right);
-				}
+				if(this.state.mouse.dragging)
+					this.orbitCamera(-0.3 * dt * dx, -0.3 * dt * dy);
 				break;
 			case Volumetrics.MODES.CAMERAROTATE:
-				if(this.state.mouse.dragging){
-					this.camera.rotate(-0.3 * dt * dx, this.camera._top);
-					this.camera.rotate(-0.3 * dt * dy, this.camera._right);
-				}
+				if(this.state.mouse.dragging)
+					this.rotateCamera(-0.3 * dt * dx, -0.3 * dt * dy);
 				break;
 		}
 	}else if(this.state.mouse.middle){
@@ -1613,12 +1704,8 @@ Volumetrics.prototype.update = function(dt){
 			case Volumetrics.MODES.CAMERAZOOM:
 			case Volumetrics.MODES.CAMERAORBIT:
 			case Volumetrics.MODES.CAMERAROTATE:
-				if(this.state.mouse.dragging){
-					var delta = [0,0,0];
-					var point = this.camera.getRayPlaneCollision(this.state.mouse.x, this.state.mouse.y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
-					vec3.subtract(delta, this.state.mouse.downpoint, point);
-					this.camera.move(delta, 1);
-				}
+				if(this.state.mouse.dragging)
+					this.panCamera(this.state.mouse.downcamerapoint, this.state.mouse.x, this.state.mouse.y);
 				break;
 		}
 	}else if(this.state.mouse.right){
@@ -1629,10 +1716,8 @@ Volumetrics.prototype.update = function(dt){
 			case Volumetrics.MODES.CAMERAZOOM:
 			case Volumetrics.MODES.CAMERAORBIT:
 			case Volumetrics.MODES.CAMERAROTATE:
-				if(this.state.mouse.dragging){
-					this.camera.rotate(-0.3 * dt * dx, this.camera._top);
-					this.camera.rotate(-0.3 * dt * dy, this.camera._right);
-				}
+				if(this.state.mouse.dragging)
+					this.rotateCamera(-0.3 * dt * dx, -0.3 * dt * dy);
 				break;
 		}
 	}else if(this.state.mouse.wheel){
@@ -1643,7 +1728,7 @@ Volumetrics.prototype.update = function(dt){
 			case Volumetrics.MODES.CAMERAZOOM:
 			case Volumetrics.MODES.CAMERAORBIT:
 			case Volumetrics.MODES.CAMERAROTATE:
-				this.camera.fov -= 10 * dt * dw;
+				this.zoomCamera(-10 * dt * dw);
 				break;
 		}
 
@@ -1745,36 +1830,48 @@ Volumetrics.prototype.getShaders = function(){
 	return this.renderer.shaders;
 }
 
-//Volumenode components are referenced by name. They must be added sepparately before.
-//Only data in volumenodes will be loaded into GPU to avoid overload.
-//If some data is no longer used it will be unloaded from GPU
-Volumetrics.prototype.addVolumeNode = function(volNode, name){
-	name = name || ("vn_" + Object.keys(this.volumeNodes).length);
+Volumetrics.prototype.addSceneNode = function(node, name){
+	if(node instanceof VolumeNode) this.addVolumeNode(node, name);
 
-	if(volNode.tf == null){
-		volNode.tf = "tf_default";
-	}
-	if(volNode.shader == null){
-		volNode.shader = "volumetric_default";
-	}
+	name = name || ("sn_" + Object.keys(this.sceneNodes).length);
 
-	volNode.background = this.background;
-	volNode.levelOfDetail = this.levelOfDetail;
-
-	var volume = this.volumes[volNode.volume];
-	volNode.setVolumeUniforms(volume);
-
-	if( this.volumeNodes[name] === undefined ){
-		this.volumeNodes[name] = volNode;
-		this.scene._root.addChild(volNode);
+	if( this.sceneNodes[name] === undefined ){
+		this.sceneNodes[name] = node;
+		this.scene._root.addChild(node);
 	}else{
-		var oldVolumeNode = this.volumeNodes[name];
+		var oldNode = this.sceneNodes[name];
 		for(var i=0; i<this.scene._root.children.length; i++){
-			if(this.scene._root.children[i] == oldVolumeNode){
-				this.scene._root.children[i] = volNode;
+			if(this.scene._root.children[i] == oldNode){
+				this.scene._root.children[i] = node;
 			}
 		}
 	}
+
+	return name;
+}
+
+Volumetrics.prototype.addVolumeNode = function(node, name){
+	name = name || ("vn_" + Object.keys(this.volumeNodes).length);
+
+	node.background = this.background;
+	node.levelOfDetail = this.levelOfDetail;
+
+	var volume = this.volumes[node.volume];
+	node.setVolumeUniforms(volume);
+
+	if( this.volumeNodes[name] === undefined ){
+		this.volumeNodes[name] = node;
+		this.scene._root.addChild(node);
+	}else{
+		var oldNode = this.volumeNodes[name];
+		for(var i=0; i<this.scene._root.children.length; i++){
+			if(this.scene._root.children[i] == oldNode){
+				this.scene._root.children[i] = node;
+			}
+		}
+	}
+
+	return name;
 }
 
 Volumetrics.prototype.getVolumeNode = function(name){
@@ -1817,17 +1914,17 @@ Volumetrics.prototype.pickPosition = function(x, y){
 	gl.clearColor(0,0,0,0);	//If later alpha channel equals 0 it's a discard or outside volume, no point in volume is picked
 
 	for(var v of Object.keys(this.volumeNodes)){
-		var volNode = this.volumeNodes[v];
+		var node = this.volumeNodes[v];
 
 		//Change shader temporaly
-		var usedShader = volNode.shader;
-		volNode.shader = "volumetric_picking";
+		var usedShader = node.shader;
+		node.shader = "volumetric_picking";
 
 		gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
-		this.renderer.render(this.scene, this.camera, [volNode]);
+		this.renderer.render(this.scene, this.camera, [node]);
 
 		//Set original shader
-		volNode.shader = usedShader;
+		node.shader = usedShader;
 
 		//Get RGBA
 		gl.readPixels(x, y, 1, 1, gl.RGBA, gl.FLOAT, pixels);
@@ -1836,7 +1933,7 @@ Volumetrics.prototype.pickPosition = function(x, y){
 		//Pos in local coordinates [-1,1] to global coordinates [R]
 		var localPos = vec4.fromValues(pixels[0], pixels[1], pixels[2], 1.0);
 		var globalPos = vec4.create();
-		vec4.transformMat4(globalPos, localPos, volNode._global_matrix);
+		vec4.transformMat4(globalPos, localPos, node._global_matrix);
 		globalPos = vec3.fromValues(globalPos[0]/globalPos[3], globalPos[1]/globalPos[3], globalPos[2]/globalPos[3])
 
 		var testDist = vec3.distance(this.camera.position, globalPos);

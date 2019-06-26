@@ -72,12 +72,14 @@ toolTestPicking.addEventListener("click", function(){
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 function testPicking(position2d, position3d, buttons){
-    var sceneNode = new RD.SceneNode();
-    sceneNode.mesh = "sphere";
-    sceneNode.position = position3d;
-    sceneNode.color = [1, 1, 0];
+    if(buttons.mouseup){
+        var sceneNode = new RD.SceneNode();
+        sceneNode.mesh = "sphere";
+        sceneNode.position = position3d;
+        sceneNode.color = [1, 1, 0];
 
-    app.volumetrics.scene._root.addChild(sceneNode);
+        app.volumetrics.addSceneNode(sceneNode);
+    }
 }
 app.volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
 
