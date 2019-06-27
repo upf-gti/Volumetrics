@@ -1229,7 +1229,7 @@ TFEditor.prototype.render = function(){
 
 /***
  * ==VolumeNode class==
- * Represents volume + tf + shader
+ * Represents volume + tf + shader + uniforms
  ***/
 var VolumeNode = function VolumeNode(){
 	this._ctor();
@@ -1243,18 +1243,21 @@ VolumeNode.prototype._ctor = function(){
 	this.levelOfDetail = 100;
 	this.isosurfaceLevel = 0.5;
 	this.voxelScaling = 1;
-	this.planeUseCameraDirection = true;
 
-	this.mesh = "proxy_box";
+	this.cuttingPlaneActive = false;
+	this.cuttingPlaneNormal = vec3.fromValues(1,1,1);
+	this.cuttingPlanePoint  = vec3.create();
+	this.cuttingPlaneUseCameraDirection = true;
+	this.cuttingPlaneZ = 0;	//0 center, - near, + far
+
 	this.shader = "volumetric_default";
+	this.mesh = "proxy_box";
 	this.tf = "tf_default";
 	this.textures.jittering = "_jittering";
 
 	this.uniforms.u_local_camera_position = vec3.create();
 
 	this._inverse_matrix = mat4.create();
-	this._planeNormal = vec3.fromValues(1,1,1);
-	this._planePoint  = vec3.create();
 }
 
 VolumeNode.prototype.render = function(renderer, camera){
@@ -1270,20 +1273,26 @@ VolumeNode.prototype.render = function(renderer, camera){
     vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
     this.uniforms.u_local_camera_position = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
 
-    if(this.planeUseCameraDirection){
-    	this._planeNormal = vec3.clone(camera.getFront());
-    	vec3.scale(this._planeNormal, this._planeNormal, -1);
-    }
+    if(this.cuttingPlaneActive){
+	    if(this.cuttingPlaneUseCameraDirection){
+	    	this.cuttingPlaneNormal = vec3.clone(camera.getFront());
+	    	vec3.scale(this.cuttingPlaneNormal, this.cuttingPlaneNormal, -1);
+	    	vec3.normalize(this.cuttingPlaneNormal, this.cuttingPlaneNormal);
 
-    aux_vec4 = vec4.fromValues(this._planeNormal[0], this._planeNormal[1], this._planeNormal[2], 1);
-    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
-    var n = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+	    	var delta = vec3.scale(vec3.create(), this.cuttingPlaneNormal, -this.cuttingPlaneZ);
+	    	this.cuttingPlanePoint = vec3.add(this.cuttingPlanePoint, vec3.create(), delta);
+	    }
 
-    aux_vec4 = vec4.fromValues(this._planePoint[0], this._planePoint[1], this._planePoint[2], 1);
-    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
-    var p = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+	    aux_vec4 = vec4.fromValues(this.cuttingPlaneNormal[0], this.cuttingPlaneNormal[1], this.cuttingPlaneNormal[2], 1);
+	    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
+	    var n = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
 
-    this.uniforms.u_cutting_plane = vec4.fromValues(n[0], n[1], n[2], -n[0]*p[0] - n[1]*p[1] - n[2]*p[2]);
+	    aux_vec4 = vec4.fromValues(this.cuttingPlanePoint[0], this.cuttingPlanePoint[1], this.cuttingPlanePoint[2], 1);
+	    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
+	    var p = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+
+	    this.uniforms.u_cutting_plane = vec4.fromValues(n[0], n[1], n[2], -n[0]*p[0] - n[1]*p[1] - n[2]*p[2]);
+	}
 
 	//Render node
 	renderer.renderNode( this, camera );
@@ -1298,6 +1307,17 @@ VolumeNode.prototype.setVolumeUniforms = function(volume){
 		this.voxelScaling = 1;
 	}
 }
+
+Object.defineProperty(VolumeNode.prototype, "shader", {
+	get: function() {
+		var s = this._shader;
+		if(this.cuttingPlaneActive) s+= "_cutting_plane";
+		return s;
+	},
+	set: function(v) {
+		this._shader = v;
+	},
+});
 
 Object.defineProperty(VolumeNode.prototype, "volume", {
 	get: function() {
@@ -1455,6 +1475,8 @@ var Volumetrics = function Volumetrics(options){
 	this.measure = {
 		first: null,
 		second: null,
+		mesh: null,
+		node: null,
 	};
 
 	this.picking = {
@@ -1476,11 +1498,12 @@ var Volumetrics = function Volumetrics(options){
 
 Volumetrics.MODES = {};
 Volumetrics.MODES.NONE = 0;
+Volumetrics.MODES.PICKPOSITION = 1;
+Volumetrics.MODES.MEASURE = 2;
 Volumetrics.MODES.CAMERAPAN = 10;
 Volumetrics.MODES.CAMERAZOOM  = 11;
 Volumetrics.MODES.CAMERAORBIT = 12;
 Volumetrics.MODES.CAMERAROTATE = 13;
-Volumetrics.MODES.PICKPOSITION = 20;
 
 
 //It may not work if the window size does not change, so call it manually if you change the container size
@@ -1491,9 +1514,20 @@ Volumetrics.prototype.onResize = function(){
 	gl.viewport(0, 0, rect.width, rect.height);
 }
 
-Volumetrics.prototype.initProxyBox = function(){
-	var mesh = GL.Mesh.box({sizex: 1, sizey: 1, sizez: 1, wireframe: true});
+Volumetrics.prototype.initMeasure = function(){
+	var vertexBuffer = new Float32Array([0,0,0,0,0,0]);
+	this.measure.mesh = new Mesh(vertexBuffer);
+	this.renderer.meshes["measure_line"] = this.measure.mesh;
 
+	this.measure.node = new SceneNode();
+	this.measure.node.flags.visible = false;
+	this.measure.node.primitive = GL.LINES;
+	this.measure.node.color = [1,1,0,1];
+
+	this.addSceneNode(this.measure.node, "_measureLine");
+}
+
+Volumetrics.prototype.initProxyBox = function(){
 	var options = {};
 	var buffers = {};
 	//switch orientation of faces so the front is inside
@@ -1530,6 +1564,7 @@ Volumetrics.prototype.resetCamera = function(){
 Volumetrics.prototype.init = function(){
 	this.resetCamera();
 	this.initProxyBox();
+	this.initMeasure();
 
 	//Add default tf
 	var defaultTF = new TransferFunction();
@@ -1668,8 +1703,6 @@ Volumetrics.prototype.rotateCamera = function(dtop, dright){
 }
 
 Volumetrics.prototype.update = function(dt){
-	this._fps++;
-
 	var dx = this.state.mouse.dx;
 	var dy = this.state.mouse.dy;
 	var dw = this.state.mouse.dwheel;
@@ -1771,6 +1804,8 @@ Volumetrics.prototype.animate = function(){
 		var dt = (this._now - this._last) * 0.001;
 		this.update(dt);
 		this.render();
+
+		this._fps++;
 	}
 }
 
@@ -1954,14 +1989,15 @@ Volumetrics.prototype.setPickPositionCallback = function(f){
 	this.picking.callback = f;
 }
 
+//Setters apply to all volumeNodes
 Object.defineProperty(Volumetrics.prototype, "background", {
 	get: function() {
 		return this._background;
 	},
-	set: function(b) {
-		this._background = b;
-		for(var v of Object.keys(this.volumeNodes)){
-		this.volumeNodes[v].background = this.background;
+	set: function(v) {
+		this._background = v;
+		for(var k of Object.keys(this.volumeNodes)){
+		this.volumeNodes[k].background = this.background;
 		}
 	},
 });
@@ -1970,10 +2006,46 @@ Object.defineProperty(Volumetrics.prototype, "levelOfDetail", {
 	get: function() {
 		return this._levelOfDetail;
 	},
-	set: function(l) {
-		this._levelOfDetail = l;
-		for(var v of Object.keys(this.volumeNodes)){
-		this.volumeNodes[v].levelOfDetail = this.levelOfDetail;
+	set: function(v) {
+		this._levelOfDetail = v;
+		for(var k of Object.keys(this.volumeNodes)){
+		this.volumeNodes[k].levelOfDetail = this.levelOfDetail;
+		}
+	},
+});
+
+Object.defineProperty(Volumetrics.prototype, "shader", {
+	get: function() {
+		return this._shader;
+	},
+	set: function(v) {
+		this._shader = v;
+		for(var k of Object.keys(this.volumeNodes)){
+		this.volumeNodes[k].shader = this.shader;
+		}
+	},
+});
+
+Object.defineProperty(Volumetrics.prototype, "cuttingPlaneActive", {
+	get: function() {
+		return this._cuttingPlaneActive;
+	},
+	set: function(v) {
+		this._cuttingPlaneActive = v;
+		for(var k of Object.keys(this.volumeNodes)){
+		this.volumeNodes[k].cuttingPlaneActive = this.cuttingPlaneActive;
+		}
+	},
+});
+
+Object.defineProperty(Volumetrics.prototype, "cuttingPlaneZ", {
+	get: function() {
+		return this._cuttingPlaneZ;
+	},
+	set: function(v) {
+		this._cuttingPlaneZ = v;
+		for(var k of Object.keys(this.volumeNodes)){
+		this.volumeNodes[k].cuttingPlaneZ = this.cuttingPlaneZ;
 		}
 	},
 });

@@ -68,7 +68,7 @@ toolTestPicking.addEventListener("click", function(){
 }, false);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
-// Tests
+// Picking
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 function testPicking(position2d, position3d, buttons){
@@ -82,6 +82,137 @@ function testPicking(position2d, position3d, buttons){
     }
 }
 app.volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Shaders
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+var shaderDefault = document.getElementById("shaderDefault");
+var onShaderDefault = function(event){
+    app.volumetrics.shader = "volumetric_default";
+}
+shaderDefault.addEventListener("click", onShaderDefault, false);
+
+var shaderXRAY = document.getElementById("shaderXRAY");
+var onShaderXRAY = function(event){
+    app.volumetrics.shader = "volumetric_xray";
+}
+shaderXRAY.addEventListener("click", onShaderXRAY, false);
+
+var shaderMIP = document.getElementById("shaderMIP");
+var onShaderMIP = function(event){
+    app.volumetrics.shader = "volumetric_mip";
+}
+shaderMIP.addEventListener("click", onShaderMIP, false);
+
+var shaderPicking = document.getElementById("shaderPicking");
+var onShaderPicking = function(event){
+    app.volumetrics.shader = "volumetric_picking";
+}
+shaderPicking.addEventListener("click", onShaderPicking, false);
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Cutting Plane
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+var cuttingONInput = document.getElementById("cuttingON");
+var onCuttingONOFF = function(event){
+    app.volumetrics.cuttingPlaneActive = cuttingONInput.checked;
+}
+cuttingONInput.addEventListener("click", onCuttingONOFF, false);
+
+var cuttingSliderInput = document.getElementById("cuttingSlider");
+var onCuttingSlider = function(event){
+    app.volumetrics.cuttingPlaneZ = cuttingSliderInput.value;
+}
+cuttingSliderInput.addEventListener("input", onCuttingSlider, false);
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Import Volumes from files
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+var importVolumeNode = new VolumeNode();
+var importONInput = document.getElementById("importON");
+var onImportONInputOFF = function(event){
+    if(importONInput.checked){
+        importVolumeNode.show();
+    }else{
+        importVolumeNode.hide();
+    }
+}
+importONInput.addEventListener("click", onImportONInputOFF, false);
+
+function onVolume(response){
+    if(response.status == VolumeLoader.DONE){
+        console.log("Volume loaded.");
+
+        for(var v of response.volumes){
+            app.volumes.push(v);
+        }
+
+        var volume = response.volume;
+        app.volumetrics.addVolume(volume, "importvol");
+
+        var node = importVolumeNode;
+        node.volume = "importvol";
+        node.tf = "mytf";
+        app.volumetrics.addVolumeNode(node, "importnode");
+
+    }else if(response.status == VolumeLoader.ERROR){
+        console.log("Error: ", response.explanation);
+    }else if(response.status == VolumeLoader.STARTING){
+        console.log("Starting...");
+    }else if(response.status == VolumeLoader.LOADINGFILES){
+        console.log("Loading Files...");
+    }else if(response.status == VolumeLoader.PARSINGFILES){
+        console.log("Parsing Volumes...");
+    }else if(response.status == VolumeLoader.CREATINGVOLUMES){
+        console.log("Creating Volumes...");
+    }
+};
+
+//Nifti
+function handleNiiInput(event){
+    var files = event.target.files;
+    if(files.length > 0)
+        VolumeLoader.loadNiftiFiles(files, onVolume, onVolume);
+};
+var niiInput = document.getElementById("niiInput");
+niiInput.addEventListener("change", handleNiiInput, false);
+
+//Dicom
+function handleDicomInput(event){
+    var files = event.target.files;
+
+    if(files.length > 0)
+        VolumeLoader.loadDicomFiles(files, onVolume, onVolume);
+};
+
+var dicomInput = document.getElementById("dicomInput");
+dicomInput.addEventListener("change", handleDicomInput, false);
+
+//VL
+function handleVLInput(event){
+    var files = event.target.files;
+    if(files.length > 0)
+        VolumeLoader.loadVLFiles(files, onVolume, onVolume);
+};
+var vlInput = document.getElementById("vlInput");
+vlInput.addEventListener("change", handleVLInput, false);
+
+function downloadVLExample(){
+    console.log("Downloading example...");
+    fetch("https://webglstudio.org/users/mfloriach/volumetrics/demo/texture3d.vl")
+        .then(function(response) {
+            return response.arrayBuffer();
+        })
+        .then(function(buffer) {
+            console.log("Example downloaded.");
+            VolumeLoader.parseVLBuffers([buffer], onVolume, onVolume);
+        });
+};
+var vlExampleButton = document.getElementById("vlExample");
+vlExampleButton.addEventListener("click", downloadVLExample);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Math
@@ -208,80 +339,3 @@ mathInit();
 
 mathONInput.addEventListener("click", onMathONOFF, false);
 mathSetButton.addEventListener("click", onMathFuncSet, false);
-
-
-///////////////////////////////////////////////////////////////////////////////////////////////
-// Import Volumes from files
-///////////////////////////////////////////////////////////////////////////////////////////////
-
-function onVolume(response){
-    if(response.status == VolumeLoader.DONE){
-        console.log("Volume loaded.");
-
-        for(var v of response.volumes){
-            app.volumes.push(v);
-        }
-
-        var volume = response.volume;
-        app.volumetrics.addVolume(volume, "myvol");
-
-        var node = new VolumeNode();
-        node.volume = "myvol";
-        node.tf = "mytf";
-        app.volumetrics.addVolumeNode(node, "myvolnode");
-
-    }else if(response.status == VolumeLoader.ERROR){
-        console.log("Error: ", response.explanation);
-    }else if(response.status == VolumeLoader.STARTING){
-        console.log("Starting...");
-    }else if(response.status == VolumeLoader.LOADINGFILES){
-        console.log("Loading Files...");
-    }else if(response.status == VolumeLoader.PARSINGFILES){
-        console.log("Parsing Volumes...");
-    }else if(response.status == VolumeLoader.CREATINGVOLUMES){
-        console.log("Creating Volumes...");
-    }
-};
-
-//Nifti
-function handleNiiInput(event){
-    var files = event.target.files;
-    if(files.length > 0)
-        VolumeLoader.loadNiftiFiles(files, onVolume, onVolume);
-};
-var niiInput = document.getElementById("niiInput");
-niiInput.addEventListener("change", handleNiiInput, false);
-
-//Dicom
-function handleDicomInput(event){
-    var files = event.target.files;
-
-    if(files.length > 0)
-        VolumeLoader.loadDicomFiles(files, onVolume, onVolume);
-};
-
-var dicomInput = document.getElementById("dicomInput");
-dicomInput.addEventListener("change", handleDicomInput, false);
-
-//VL
-function handleVLInput(event){
-    var files = event.target.files;
-    if(files.length > 0)
-        VolumeLoader.loadVLFiles(files, onVolume, onVolume);
-};
-var vlInput = document.getElementById("vlInput");
-vlInput.addEventListener("change", handleVLInput, false);
-
-function downloadVLExample(){
-    console.log("Downloading example...");
-    fetch("https://webglstudio.org/users/mfloriach/volumetrics/demo/texture3d.vl")
-        .then(function(response) {
-            return response.arrayBuffer();
-        })
-        .then(function(buffer) {
-            console.log("Example downloaded.");
-            VolumeLoader.parseVLBuffers([buffer], onVolume, onVolume);
-        });
-};
-var vlExampleButton = document.getElementById("vlExample");
-vlExampleButton.addEventListener("click", downloadVLExample);
