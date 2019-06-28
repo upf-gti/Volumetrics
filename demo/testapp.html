@@ -12,7 +12,7 @@
 </head>
 <body>
 <div class="container">
-    <div id=toolbox style="width: 100%">
+    <div id=toolbox style="width: 100vw; height: 20px;">
         <div style="float: left; width: 30%; height: 1px;"></div>
         <button id="toolCameraNone">None</button>
         <a>|</a>
@@ -25,7 +25,7 @@
         <button id="toolTestPicking">Test Picking</button>
     </div>
 
-    <div id=visualizer style="height: 90%;">
+    <div id=visualizer style="width: 100vw; height: calc(100vh - 20px);">
         <div id="leftBar" style="float: left; width: 30%;">
             <div>
                 <p>Volume from import <input id="importON" type="checkbox" checked="true"></p>
@@ -56,10 +56,12 @@
             </div>
             <hr>
             <p>Transfer Function Editor</p>
-            <div id="tfeditor" style=""></div>
+            <div id="tfeditor" style="">
+                <!--tfeditor creates a 2d canvas here-->
+            </div>
         </div>
-        <div id="volumetrics" style="float: right; width: 70%;">
-            <!--<canvas id="mycanvas"></canvas>-->
+        <div id="volumetrics" style="float: right; width: 70%; height: 100%;">
+            <!--volumetrics creates a webgl2 canvas here-->
         </div>
     </div>
 </div>

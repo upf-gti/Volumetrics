@@ -27,7 +27,7 @@ function init(){
 
     app.volumetrics.addTransferFunction(tf, "mytf");
 
-    app.volumetrics.setPickPositionCallback(testPicking);
+    app.volumetrics.setPickPositionCallback(onPicking);
 }
 init();
 
@@ -68,14 +68,25 @@ toolTestPicking.addEventListener("click", function(){
 }, false);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
+// Testing
+///////////////////////////////////////////////////////////////////////////////////////////////
+function testLabels(){
+    var labelNode = new LabelNode();
+    labelNode.text = "Hola Javi!!!"
+    labelNode.pointerPosition = [-100,100,100];
+    app.volumetrics.labelNodes.test = labelNode;
+}
+testLabels();
+
+///////////////////////////////////////////////////////////////////////////////////////////////
 // Picking
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-function testPicking(position2d, position3d, buttons){
-    if(buttons.mouseup){
+function onPicking(info){
+    if(info.up && info.mouseGlobalPosition != null){
         var sceneNode = new RD.SceneNode();
         sceneNode.mesh = "sphere";
-        sceneNode.position = position3d;
+        sceneNode.position = info.mouseGlobalPosition;
         sceneNode.color = [1, 1, 0];
 
         app.volumetrics.addSceneNode(sceneNode);

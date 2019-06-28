@@ -1401,52 +1401,180 @@ VolumeNode.prototype.show = function(){
 
 extendClass( VolumeNode, RD.SceneNode );
 
+/***
+ * ==LabelNode class==
+ * Represents a text
+ ***/
+var LabelNode = function LabelNode(){
+	this._ctor();
+}
+
+LabelNode.prototype._ctor = function(){
+	RD.SceneNode.prototype._ctor.call(this);
+
+	this._pointerPosition = vec3.create();
+
+	this.text = "";
+	this.textColor = [0,0,0,1];
+	this.textFontFamily = "Arial";
+	this.textFontStyle = "normal";
+	this.textFontSize = "16px";
+	this.backgroundColor = [255,255,255,0.5];
+}
+
+Object.defineProperty(LabelNode.prototype, "pointerPosition", {
+	get: function() {
+		return this._pointerPosition;
+	},
+	set: function(v) {
+		this._pointerPosition.set(v);
+	},
+});
+
+LabelNode.prototype.hide = function(){
+	this.flags.visible = false;
+}
+
+LabelNode.prototype.show = function(){
+	this.flags.visible = true;
+}
+
+extendClass( LabelNode, RD.SceneNode );
+
+/***
+ * ==LabelRenderer class==
+ * Controls rendering of LabelNodes
+ ***/
+var LabelRenderer = function LabelRenderer(container){
+	this.container = container;
+
+	//node._uid to div
+	this._divs = {};
+}
+
+LabelRenderer.prototype.render = function(nodes, camera, layers){
+	if(layers === undefined)
+		layers = 0xFF;
+
+	if(!camera)
+		throw("Renderer.render: camera not provided");
+
+	if(nodes.length){
+		for(var i=0; i<nodes.length; i++){
+			var node = nodes[i];
+
+			var div = this._divs[node._uid];
+
+			if(!div){
+				div = document.createElement("div");
+				div.style.position = "absolute";
+				div.style.visibility = "hidden";
+				div.style["z-index"] = 2;
+				this._divs[node._uid] = div;
+				this.container.appendChild(div);
+			}
+			
+			if(node.flags.visible === false || !(node.layers & layers)){
+				div.style.visibility = "hidden";
+			}else{
+				div.innerText = node.text;
+				var pos2d = camera.project(node.position);
+				var pos2dpointer = camera.project(node.pointerPosition);
+
+				var rect = div.getBoundingClientRect();
+
+				div.style.left = pos2d[0]-(rect.width/2) + "px";
+				div.style.bottom = pos2d[1]-(pos2dpointer[1]>pos2d[1]?rect.height:0) + "px";
+
+				div.style["color"] = "rgba("+node.textColor[0]+","+node.textColor[1]+","+node.textColor[2]+","+node.textColor[3]+")";
+				div.style["background-color"] = "rgba("+node.backgroundColor[0]+","+node.backgroundColor[1]+","+node.backgroundColor[2]+","+node.backgroundColor[3]+")";
+				div.style["font-family"] = node.textFontFamily;
+				div.style["font-style"] = node.textFontStyle;
+				div.style["font-size"] = node.textFontSize;
+
+				div.style.visibility = "visible";
+			}
+		}
+	}
+}
 
 /***
  * ==Volumetrics class==
  * Controls scene and renderers
  *
- * Useful options: canvas, container, visible, background, levelOfDetail
+ * Useful options: container, visible, background, levelOfDetail
  ***/
 var Volumetrics = function Volumetrics(options){
 	//WebGL Renderer and scene
 	options = options || {};
-	options.container = options.container || document.body;
+	this.outerContainer = options.container || document.body;
 	options.version = 2;
+	if(!(options.visible === true || options.visible === false)){
+		options.visible = true;
+	}
+
+	//Containers
+	this.container = document.createElement("div");
+	this.container.style.position = "relative";
+	this.container.style.overflow = "hidden";
+	this.container.style.width = "100%";
+	this.container.style.height = "100%";
+	this.container.style["z-index"] = 0;
+	this.outerContainer.appendChild(this.container);
+
+	options.container = this.container;
 	this.context = GL.create(options);
 	if( this.context.webgl_version != 2 || !this.context ){
 	    alert("WebGL 2.0 not supported by your browser");
 	}
 
-	if(!(options.visible === true || options.visible === false)){
-		options.visible = true;
-	}
+	this.canvas = this.context.canvas;
+	this.canvas.style.position = "absolute";
+	this.canvas.style.width = "100%";
+	this.canvas.style.height = "100%";
+	this.canvas.style["z-index"] = 1;
 
-	options.background = options.background || [0.7,0.7,0.9,1];
-	options.levelOfDetail = options.levelOfDetail || 100;
-
-	this.container = options.container;
-	this.context.canvas.style.width = "100%";
-	this.context.canvas.style.height = "100%";
 	window.addEventListener("resize", this.onResize.bind(this));
 
+
+
+	//Camera
+	this.camera = new RD.Camera();
+
+
+	this.layers = 0xFF;
+
+
+	//3D Renderer
 	this.renderer = new RD.Renderer(this.context);
 	this.scene = new RD.Scene();
-
-	//Label renderer and storage
-	this.labelRenderer = null; //new LabelRenderer();
-	this.labels = {};
-
 	//Volumes and TransferFunctions storage
 	this.volumes = {};
 	this.tfs = {};
-
 	//Quick access to stored nodes in scene by name
 	this.volumeNodes = {};
 	this.sceneNodes = {};
 
-	//Camera
-	this.camera = new RD.Camera();
+
+
+	//Label renderer and storage
+	this.labelRenderer = new LabelRenderer(this.container);
+	this.labelNodes = {};
+	this.labelLinesMesh = null;
+	this.labelLinesSceneNode = new RD.SceneNode();
+	this.labelLinesSceneNode.mesh = "_label_lines_mesh";
+	this.labelLinesSceneNode.flags.visible = false;
+	this.labelLinesSceneNode.primitive = GL.LINES;
+	this.addSceneNode(this.labelLinesSceneNode, "_label_lines_scene_node");
+
+
+
+	//Global uniforms
+	this.visible = options.visible;
+	this.background = options.background = options.background || [0.7,0.7,0.9,1];
+	this.levelOfDetail = options.levelOfDetail = options.levelOfDetail || 100;
+
+
 
 	//State (for inputs)
 	this.state = {
@@ -1456,8 +1584,8 @@ var Volumetrics = function Volumetrics(options){
 			right: false,
 			downx: 0,
 			downy: 0,
-			downcamerapoint: null,
-			downglobalpoint: null,
+			downcameraposition: null,
+			downglobalposition: null,
 			upglobalpoint: null,
 			x: 0,
 			y: 0,
@@ -1487,11 +1615,6 @@ var Volumetrics = function Volumetrics(options){
 
 	this._fps = 0;
 
-	this.background = options.background;
-	this.levelOfDetail = options.levelOfDetail;
-
-	this.visible = options.visible;
-
 	this.init();
 
 }
@@ -1505,12 +1628,10 @@ Volumetrics.MODES.CAMERAZOOM  = 11;
 Volumetrics.MODES.CAMERAORBIT = 12;
 Volumetrics.MODES.CAMERAROTATE = 13;
 
-
-//It may not work if the window size does not change, so call it manually if you change the container size
 Volumetrics.prototype.onResize = function(){
-	var rect = this.context.canvas.getBoundingClientRect();
-	this.context.canvas.width = rect.width;
-	this.context.canvas.height = rect.height;
+	var rect = this.canvas.getBoundingClientRect();
+	this.canvas.width = rect.width;
+	this.canvas.height = rect.height;
 	gl.viewport(0, 0, rect.width, rect.height);
 }
 
@@ -1519,7 +1640,7 @@ Volumetrics.prototype.initMeasure = function(){
 	this.measure.mesh = new Mesh(vertexBuffer);
 	this.renderer.meshes["measure_line"] = this.measure.mesh;
 
-	this.measure.node = new SceneNode();
+	this.measure.node = new RD.SceneNode();
 	this.measure.node.flags.visible = false;
 	this.measure.node.primitive = GL.LINES;
 	this.measure.node.color = [1,1,0,1];
@@ -1534,7 +1655,7 @@ Volumetrics.prototype.initProxyBox = function(){
 	buffers.vertices = new Float32Array([-1,1,-1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,-1,1,-1,1,1,1,-1,1,1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,1,-1,1]);
 	buffers.normals = new Float32Array([-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0]);
 	buffers.coords = new Float32Array([0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0]);
-	buffers.wireframe = new Uint16Array([0,2, 2,5, 5,4, 4,0,   6,7, 7,10, 10,11, 11,6, 0,6, 2,7, 5,10, 4,11  ]);
+	buffers.wireframe = new Uint16Array([0,2, 2,5, 5,4, 4,0, 6,7, 7,10, 10,11, 11,6, 0,6, 2,7, 5,10, 4,11]);
 	options.bounding = BBox.fromCenterHalfsize( [0,0,0], [1,1,1] );
 
 
@@ -1600,6 +1721,17 @@ Volumetrics.prototype.computeFPS = function(){
 	this._fps = 0;
 }
 
+Volumetrics.prototype.computeProjections = function(){
+	var x = this.state.mouse.x;
+	var y = this.state.mouse.y;
+
+	var mouseScreenPosition = vec2.fromValues(x, y);
+	var mouseGlobalPosition = this.pickPosition(x, y);
+	var mouseCameraPosition = this.camera.getRayPlaneCollision(x, y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
+
+	return {mouseScreenPosition: mouseScreenPosition, mouseGlobalPosition: mouseGlobalPosition, mouseCameraPosition: mouseCameraPosition};
+}
+
 Volumetrics.prototype.onmousedown = function(e){
 	this.state.mouse.left = e.which == 1;
 	this.state.mouse.middle = e.which == 2;
@@ -1607,18 +1739,20 @@ Volumetrics.prototype.onmousedown = function(e){
 	this.state.mouse.downx = e.canvasx;
 	this.state.mouse.downy = e.canvasy;
 	this.state.mouse.pressed = true;
-	this.state.mouse.downcamerapoint = this.camera.getRayPlaneCollision(this.state.mouse.downx, this.state.mouse.downy, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
-	if(this.activeMode == Volumetrics.MODES.MEASURE || (this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback)){
-		var x = this.state.mouse.x;
-		var y = this.state.mouse.y;
-		var position3d = this.pickPosition(x, y);
-		if(position3d != null){
-			var position2d = vec2.create();
-			position2d[0] = x;
-			position2d[1] = y;
-			this.picking.callback(position2d, position3d, {mousedown: true, mouseup: false, left: this.state.mouse.left, middle: this.state.mouse.middle, right: this.state.mouse.right});
-			this.state.mouse.downglobalpoint = position3d;
-		}
+
+	var projections = this.computeProjections();
+	this.state.mouse.downcameraposition = projections.mouseCameraPosition;
+	this.state.mouse.downglobalposition = projections.mouseGlobalPosition;
+
+	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
+		var info = projections;
+		info.down = true;
+		info.dragging = false;
+		info.up = false;
+		info.left = this.state.mouse.left;
+		info.middle = this.state.mouse.middle;
+		info.right = this.state.mouse.right;
+		this.picking.callback(info);
 	}
 }
 
@@ -1630,29 +1764,36 @@ Volumetrics.prototype.onmousemove = function(e){
 		this.state.mouse.dx += e.deltax;
 		this.state.mouse.dy += e.deltay;
 
-		if(this.activeMode == Volumetrics.MODES.MEASURE){
-			var x = this.state.mouse.x;
-			var y = this.state.mouse.y;
-			var position3d = this.pickPosition(x, y);
-			if(position3d != null){
-				this.state.mouse.upglobalpoint = position3d;
-			}
+		var projections = this.computeProjections();
+		this.state.mouse.cameraposition = projections.mouseCameraPosition;
+		this.state.mouse.globalposition = projections.mouseGlobalPosition;
+
+		if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
+			var info = projections;
+			info.down = false;
+			info.dragging = true;
+			info.up = false;
+			info.left = this.state.mouse.left;
+			info.middle = this.state.mouse.middle;
+			info.right = this.state.mouse.right;
+			this.picking.callback(info);
 		}
 	}
 }
 
 Volumetrics.prototype.onmouseup = function(e){
 	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
-		var x = this.state.mouse.x;
-		var y = this.state.mouse.y;
-		var position3d = this.pickPosition(x, y);
-		if(position3d != null){
-			var position2d = vec2.create();
-			position2d[0] = x;
-			position2d[1] = y;
-			this.picking.callback(position2d, position3d, {mousedown: false, mouseup: true, left: this.state.mouse.left, middle: this.state.mouse.middle, right: this.state.mouse.right});
-			this.state.mouse.upglobalpoint = position3d;
-		}
+		var info = {};
+		info.mouseScreenPosition = vec2.fromValues(this.state.mouse.x, this.state.mouse.y);
+		info.mouseCameraPosition = this.state.mouse.cameraposition;
+		info.mouseGlobalPosition = this.state.mouse.globalposition;
+		info.down = false;
+		info.dragging = false;
+		info.up = true;
+		info.left = this.state.mouse.left;
+		info.middle = this.state.mouse.middle;
+		info.right = this.state.mouse.right;
+		this.picking.callback(info);
 	}
 
 	this.state.mouse.left = this.state.mouse.middle = this.state.mouse.right = false;
@@ -1675,10 +1816,8 @@ Volumetrics.prototype.onkey = function(e){
 	}
 }
 
-Volumetrics.prototype.panCamera = function(targetPoint, x, y){
-	var delta = [0,0,0];
-	var point = this.camera.getRayPlaneCollision(x, y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
-	vec3.subtract(delta, targetPoint, point);
+Volumetrics.prototype.panCamera = function(targetPoint, currentPoint){
+	var delta = vec3.subtract(vec3.create(), targetPoint, currentPoint);
 	this.camera.move(delta, 1);
 }
 
@@ -1714,7 +1853,7 @@ Volumetrics.prototype.update = function(dt){
 			//Update camera
 			case Volumetrics.MODES.CAMERAPAN:
 				if(this.state.mouse.dragging)
-					this.panCamera(this.state.mouse.downcamerapoint, this.state.mouse.x, this.state.mouse.y);
+					this.panCamera(this.state.mouse.downcameraposition, this.state.cameraposition);
 				break;
 			case Volumetrics.MODES.CAMERAZOOM:
 				if(this.state.mouse.dragging)
@@ -1738,7 +1877,7 @@ Volumetrics.prototype.update = function(dt){
 			case Volumetrics.MODES.CAMERAORBIT:
 			case Volumetrics.MODES.CAMERAROTATE:
 				if(this.state.mouse.dragging)
-					this.panCamera(this.state.mouse.downcamerapoint, this.state.mouse.x, this.state.mouse.y);
+					this.panCamera(this.state.mouse.downcameraposition, this.state.cameraposition);
 				break;
 		}
 	}else if(this.state.mouse.right){
@@ -1750,7 +1889,7 @@ Volumetrics.prototype.update = function(dt){
 			case Volumetrics.MODES.CAMERAORBIT:
 			case Volumetrics.MODES.CAMERAROTATE:
 				if(this.state.mouse.dragging)
-					this.rotateCamera(-0.3 * dt * dx, -0.3 * dt * dy);
+					this.orbitCamera(-0.3 * dt * dx, -0.3 * dt * dy);
 				break;
 		}
 	}else if(this.state.mouse.wheel){
@@ -1771,11 +1910,44 @@ Volumetrics.prototype.update = function(dt){
 	if(this.camera.fov < 10) this.camera.fov = 10;
 	else if(this.camera.fov > 100) this.camera.fov = 100;
 
-	
-
 	//Update tfs textures
 	for(var k of Object.keys(this.tfs)){
 		this.tfs[k].update();
+	}
+
+	//Update label lines
+	var labels = Object.values(this.labelNodes);
+	if(labels.length){
+		var visibleNodes = [];
+		for(var node of labels){
+			if(node.flags.visible === false || !(node.layers & this.layers)){
+				continue;
+			}
+			visibleNodes.push(node);
+		}
+
+		if(visibleNodes.length){
+			var vertices = new Float32Array(visibleNodes.length * 6);
+
+			for(var i=0; i<visibleNodes.length; i++){
+				vertices.set(node.position, i*6);
+				vertices.set(node.pointerPosition, i*6 + 3);
+			}
+
+			if(this.labelLinesMesh == null){
+				var buffer = new GL.Buffer(gl.ARRAY_BUFFER, vertices, 3, gl.STREAM_DRAW);
+				this.labelLinesMesh = new GL.Mesh();
+				this.labelLinesMesh.addBuffer("vertices", buffer);
+				this.renderer.meshes["_label_lines_mesh"] = this.labelLinesMesh;
+
+			}else{
+				this.labelLinesMesh.updateVertexBuffer("vertices", "a_vertex", 3, vertices);
+			}
+
+			this.labelLinesSceneNode.flags.visible = true;
+		}
+	}else{
+		this.labelLinesSceneNode.flags.visible = false;
 	}
 
 	this.scene.update(dt);
@@ -1788,8 +1960,10 @@ Volumetrics.prototype.render = function(){
 
 	//render Scene
 	gl.enable(gl.DEPTH_TEST);
-	this.renderer.render(this.scene, this.camera);
+	this.renderer.render(this.scene, this.camera, null, this.layers);
 	gl.disable(gl.DEPTH_TEST);
+
+	this.labelRenderer.render(Object.values(this.labelNodes), this.camera, this.layers);
 
 	//render Labels
 
@@ -1811,14 +1985,14 @@ Volumetrics.prototype.animate = function(){
 
 Volumetrics.prototype.show = function(){
 	this.visible = true;
-	this.context.canvas.style.display = "block";
+	this.canvas.style.display = "block";
 	this._last = getTime();
 	this.animate();
 }
 
 Volumetrics.prototype.hide = function(){
 	this.visible = false;
-	this.context.canvas.style.display = "none";
+	this.canvas.style.display = "none";
 }
 
 Volumetrics.prototype.addVolume = function(volume, name){
@@ -1913,13 +2087,23 @@ Volumetrics.prototype.getVolumeNode = function(name){
 	return this.volumeNodes[name];
 }
 
+Volumetrics.prototype.addLabelNode = function(node, name){
+	name = name || ("ln_" + Object.keys(this.volumeNodes).length);
+	this.labelNodes[name] = node;
+	return name;
+}
+
+Volumetrics.prototype.getLabelNode = function(name){
+	return this.labelNodes[name];
+}
+
 //Creates an FBO if there is none or if canvas size has changed. Returns the fbo
 Volumetrics.prototype.getFBO = function(){
 	var needFBO = false;
 
 	//Texture does not exist or does not have correct size, must be done/redone
-	if(this.picking.texture == null || this.picking.texture.width != this.context.canvas.width || this.picking.texture.height != this.context.canvas.height){
-		this.picking.texture = new GL.Texture(this.context.canvas.width, this.context.canvas.height, { format: gl.RGBA, type: gl.FLOAT, magFilter: gl.LINEAR,  });
+	if(this.picking.texture == null || this.picking.texture.width != this.canvas.width || this.picking.texture.height != this.canvas.height){
+		this.picking.texture = new GL.Texture(this.canvas.width, this.canvas.height, { format: gl.RGBA, type: gl.FLOAT, magFilter: gl.LINEAR,  });
 		needFBO = true;
 	}
 
