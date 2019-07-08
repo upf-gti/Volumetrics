@@ -5,68 +5,6 @@
  * v1.0
  ***/
 
-/***
- * ==Utils class==
- ***/
- var Utils = {};
-
- Utils.toHalf = (function() {
- 	//https://esdiscuss.org/topic/float16array
-	
-	var floatView = new Float32Array(1);
-	var int32View = new Int32Array(floatView.buffer);
-
-	/* This method is faster than the OpenEXR implementation (very often
-	 * used, eg. in Ogre), with the additional benefit of rounding, inspired
-	 * by James Tursa?s half-precision code. */
-	return function toHalf(val) {
-
-		floatView[0] = val;
-		var x = int32View[0];
-
-		var bits = (x >> 16) & 0x8000; /* Get the sign */
-		var m = (x >> 12) & 0x07ff; /* Keep one extra bit for rounding */
-		var e = (x >> 23) & 0xff; /* Using int is faster here */
-
-		/* If zero, or denormal, or exponent underflows too much for a denormal
-		 * half, return signed zero. */
-		if (e < 103) {
-			return bits;
-		}
-
-		/* If NaN, return NaN. If Inf or exponent overflow, return Inf. */
-		if (e > 142) {
-			bits |= 0x7c00;
-			/* If exponent was 0xff and one mantissa bit was set, it means NaN,
-			 * not Inf, so make sure we set one mantissa bit too. */
-			bits |= ((e == 255) ? 0 : 1) && (x & 0x007fffff);
-			return bits;
-		}
-
-		/* If exponent underflows but not too much, return a denormal */
-		if (e < 113) {
-			m |= 0x0800;
-			/* Extra rounding may overflow and set mantissa to 0 and exponent
-			 * to 1, which is OK. */
-			bits |= (m >> (114 - e)) + ((m >> (113 - e)) & 1);
-			return bits;
-		}
-
-		bits |= ((e - 112) << 10) | (m >> 1);
-		/* Extra rounding. An overflow will set mantissa to 0 and increment
-		 * the exponent, which is OK. */
-		bits += m & 1;
-		return bits;
-	};
-}());
-
-Utils.uint16ArrayToHalf = function(view){
-	var view16 = new Uint16Array(view.length);
-	for(var i = 0; i<view.length; i++){
-		view16[i] = Utils.toHalf(view[i]);
-	}
-	return view16;
-}
 
 /***
  * ==Volume class==
@@ -113,6 +51,10 @@ Volume.create = function(width, height, depth, options, dataBuffer){
 	var vol = new Volume();
 	vol.setVolume(width, height, depth, options, dataBuffer);
 	return vol;
+}
+
+Volume.clone = function(volume){
+	return Volume.create(volume.width, volume.height, volume.depth, {widthSpacing: volume.widthSpacing, heightSpacing: volume.heightSpacing, depthSpacing: volume.depthSpacing, voxelDepth: volume.voxelDepth, channels: volume.channels}, volume._dataBuffer)
 }
 
 Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer){
@@ -701,6 +643,19 @@ var TransferFunction = function TransferFunction(){
 	this._needUpload = false;
 }
 
+TransferFunction.create = function(width, points){
+	var tf = new TransferFunction();
+
+	tf.width = width;
+	tf.points = points.slice(0);	//Clone array instead of copying reference
+
+	return tf;
+}
+
+TransferFunction.clone = function(tf){
+	return TransferFunction.create(tf.width, tf.points);
+}
+
 TransferFunction.prototype.sort = function(){
 	this.points.sort(function(a,b){
 		if(a.x < b.x) return -1;
@@ -858,18 +813,16 @@ var TFEditor = function TFEditor(options){
 	
 
 	//State
-	this.state = {
-		mouse: {
-			x: 0,
-			y: 0,
-			downx: 0,
-			downy: 0,
-			draging: false,
-			dragged: false,
-		},
-		previousSelectedUp: null,
-		selected: null,
+	this.mouse = {
+		x: 0,
+		y: 0,
+		downx: 0,
+		downy: 0,
+		draging: false,
+		dragged: false,
 	};
+	this.previousSelectedUp = null;
+	this.selected = null;
 
 	//TF to edit and histogram to show
 	this.tf = null;
@@ -940,7 +893,7 @@ TFEditor.prototype.initDivs = function(newcontainer){
 		div.style.padding = "0";
 		this.domElements["div_"+c] = div;
 
-		var text = document.createElement("a");
+		var text = document.createElement("span");
 		text.style.width = "50px";
 		text.style["font-family"] = "Courier New";
 		text.style["font-size"] = "12px";
@@ -990,55 +943,55 @@ TFEditor.prototype._onSliderChange = function(event){
 	var v = Math.max(Math.min(parseFloat(val), 1), 0);
 
 	this.modify(c, v);
-	this.setInputs(this.state.selected);
+	this.setInputs(this.selected);
 }
 
 TFEditor.prototype._onMouseDown = function(event){
-	this.state.mouse.dragging = true;
-	var x = this.state.mouse.downx = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
-	var y = this.state.mouse.downy = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
+	this.mouse.dragging = true;
+	var x = this.mouse.downx = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
+	var y = this.mouse.downy = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
 
 	this.select(x);
 
-	if(this.state.selected == null){
-		if(Math.abs( this.state.mouse.y - 0.5 ) < this._middle/2 )
+	if(this.selected == null){
+		if(Math.abs( this.mouse.y - 0.5 ) < this._middle/2 )
 			this.create(x);
 	}
 }
 
 TFEditor.prototype._onMouseUp = function(event){
-	var x = this.state.mouse.x;
-	var y = this.state.mouse.y;
+	var x = this.mouse.x;
+	var y = this.mouse.y;
 
-	var s = this.state.selected;
+	var s = this.selected;
 	this.select(x);
-	var selectedUp = this.state.selected;
+	var selectedUp = this.selected;
 
-	if(!this.state.mouse.dragged && this.state.previousSelectedUp == selectedUp){
+	if(!this.mouse.dragged && this.previousSelectedUp == selectedUp){
 		this.remove();
 	}
 
-	this.state.mouse.dragging = false;
-	this.state.mouse.dragged = false;
-	this.state.selected = s;
-	this.state.previousSelectedUp = selectedUp;
+	this.mouse.dragging = false;
+	this.mouse.dragged = false;
+	this.selected = s;
+	this.previousSelectedUp = selectedUp;
 
 	return false;
 }
 
 TFEditor.prototype._onMouseMove = function(event){
-	var x = this.state.mouse.x = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
-	var y = this.state.mouse.y = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
+	var x = this.mouse.x = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
+	var y = this.mouse.y = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
 
-	if(this.state.mouse.dragging && this.state.selected){
-		this.state.mouse.dragged = true;
+	if(this.mouse.dragging && this.selected){
+		this.mouse.dragged = true;
 		this.moveTo(x);
 	}
 }
 
 TFEditor.prototype._onMouseLeave = function(event){
-	this.state.mouse.dragging = false;
-	this.state.mouse.dragged = false;
+	this.mouse.dragging = false;
+	this.mouse.dragged = false;
 }
 
 TFEditor.prototype.show = function(){
@@ -1081,7 +1034,7 @@ TFEditor.prototype.select = function(x){
 
 	for(var p of this.tf.points){
 		if(p.x >= x-r && p.x <= x+r){
-			this.state.selected = p;
+			this.selected = p;
 			this.setInputs(p);
 			break;
 		}
@@ -1089,20 +1042,20 @@ TFEditor.prototype.select = function(x){
 }
 
 TFEditor.prototype.unselect = function(){
-	this.state.selected = null;
+	this.selected = null;
 	this.disableInputs(true);
 }
 
 TFEditor.prototype.moveTo = function(x){
 	if(this.tf == null) return null;
 
-	if(this.state.selected != null){
-		this.state.selected.x = x;
+	if(this.selected != null){
+		this.selected.x = x;
 		this.tf.sort();
 	}
 
-	if(this.state.selected.length > 0){
-		for(var p of this.state.selected){
+	if(this.selected.length > 0){
+		for(var p of this.selected){
 			p.x = x;
 			p.y = y;
 		}
@@ -1128,15 +1081,15 @@ TFEditor.prototype.create = function(x){
 	this.tf.points.push(p);
 	this.tf.sort();
 
-	this.state.selected = p;
+	this.selected = p;
 	this.setInputs(p);
 }
 
 TFEditor.prototype.remove = function(){
 	if(this.tf == null) return null;
 
-	if(this.state.selected != null){
-		this.state.selected.x = -1;
+	if(this.selected != null){
+		this.selected.x = -1;
 		this.tf.clean();
 		this.unselect();
 	}
@@ -1145,8 +1098,8 @@ TFEditor.prototype.remove = function(){
 TFEditor.prototype.modify = function(c, v){
 	if(this.tf == null) return null;
 
-	if(this.state.selected){
-		this.state.selected[c] = v;
+	if(this.selected){
+		this.selected[c] = v;
 		this.tf._needUpdate = true;
 	}
 }
@@ -1206,7 +1159,7 @@ TFEditor.prototype.drawTF = function(){
 		var g = 255*p.g;
 		var b = 255*p.b;
 		ctx.fillStyle = "rgb("+r+","+g+","+b+")";
-		if(p == this.state.selected) ctx.strokeStyle = "rgb(255,255,255)";
+		if(p == this.selected) ctx.strokeStyle = "rgb(255,255,255)";
 		else ctx.strokeStyle = "rgb(0,0,0)";
 
 		var x = p.x * w;
@@ -1315,6 +1268,13 @@ Object.defineProperty(VolumeNode.prototype, "shader", {
 		return s;
 	},
 	set: function(v) {
+		if(typeof v === "string" || v instanceof String){
+			if(v.endsWith("_cutting_plane"))
+				v = v.substring(0, v.length - 14);
+		}else{
+			v = "volumetric_default";
+		}
+		
 		this._shader = v;
 	},
 });
@@ -1419,6 +1379,10 @@ LabelNode.prototype._ctor = function(){
 	this.textFontFamily = "Arial";
 	this.textFontStyle = "normal";
 	this.textFontSize = "16px";
+	this.textAlign = "center";
+	this.margin = "0px";
+	this.padding = "2px";
+	this.border = "none";
 	this.backgroundColor = [255,255,255,0.5];
 }
 
@@ -1448,8 +1412,19 @@ extendClass( LabelNode, RD.SceneNode );
 var LabelRenderer = function LabelRenderer(container){
 	this.container = container;
 
-	//node._uid to div
-	this._divs = {};
+	this._elements = {};
+	this._onclickcallback = null;
+	this._oninputcallback = null;
+	this._mustupdatelisteners = false;
+
+	this._testDiv = document.createElement("div");
+	this._testDiv.style.position = "absolute";
+	this._testDiv.style.visibility = "hidden";
+	this._testDiv.style.height = "auto";
+	this._testDiv.style.width = "auto";
+	this._testDiv.style["z-index"] = -1;
+	this._testDiv.style["white-space"] = "nowrap";
+	this.container.appendChild(this._testDiv);
 }
 
 LabelRenderer.prototype.render = function(nodes, camera, layers){
@@ -1459,44 +1434,97 @@ LabelRenderer.prototype.render = function(nodes, camera, layers){
 	if(!camera)
 		throw("Renderer.render: camera not provided");
 
-	if(nodes.length){
-		for(var i=0; i<nodes.length; i++){
-			var node = nodes[i];
+	for(var i=0; i<nodes.length; i++){
+		var node = nodes[i];
 
-			var div = this._divs[node._uid];
+		var e = this._elements[node._uid];
 
-			if(!div){
-				div = document.createElement("div");
-				div.style.position = "absolute";
-				div.style.visibility = "hidden";
-				div.style["z-index"] = 2;
-				this._divs[node._uid] = div;
-				this.container.appendChild(div);
-			}
+		if(!e){
+			e = document.createElement("input");
+			e.style.position = "absolute";
+			e.style.visibility = "hidden";
+			e.style["z-index"] = 2;
+			e.uid = node._uid;
+			e.onclick = this.onclick;
+			e.oninput = this.oninput;
+			this._elements[node._uid] = e;
+			this.container.appendChild(e);
+		}
+
+		if(this._mustupdatelisteners){
+			e.onclick = this.onclick;
+			e.oninput = this.oninput;
+			this._mustupdatelisteners = false;
+		}
+		
+		if(node.flags.visible === false || !(node.layers & layers)){
+			e.style.visibility = "hidden";
+		}else{
+			e.value = node.text;
 			
-			if(node.flags.visible === false || !(node.layers & layers)){
-				div.style.visibility = "hidden";
-			}else{
-				div.innerText = node.text;
-				var pos2d = camera.project(node.position);
-				var pos2dpointer = camera.project(node.pointerPosition);
+			var pos2d = camera.project(node.position);
+			var pos2dpointer = camera.project(node.pointerPosition);
 
-				var rect = div.getBoundingClientRect();
+			this._testDiv.innerText = e.value;
+			this._testDiv.style["margin"] = node.margin;
+			this._testDiv.style["padding"] = node.padding;
+			this._testDiv.style["border"] = node.border;
+			this._testDiv.style["font-family"] = node.textFontFamily;
+			this._testDiv.style["font-style"] = node.textFontStyle;
+			this._testDiv.style["font-size"] = node.textFontSize;
 
-				div.style.left = pos2d[0]-(rect.width/2) + "px";
-				div.style.bottom = pos2d[1]-(pos2dpointer[1]>pos2d[1]?rect.height:0) + "px";
+			e.style.width = (this._testDiv.clientWidth > 0 ? this._testDiv.clientWidth + 2 : 10) + "px";
+			e.style.height = (this._testDiv.clientHeight > 0 ? (this._testDiv.clientHeight + 2) + "px" : node.textFontSize);
 
-				div.style["color"] = "rgba("+node.textColor[0]+","+node.textColor[1]+","+node.textColor[2]+","+node.textColor[3]+")";
-				div.style["background-color"] = "rgba("+node.backgroundColor[0]+","+node.backgroundColor[1]+","+node.backgroundColor[2]+","+node.backgroundColor[3]+")";
-				div.style["font-family"] = node.textFontFamily;
-				div.style["font-style"] = node.textFontStyle;
-				div.style["font-size"] = node.textFontSize;
+			var rect = e.getBoundingClientRect();
 
-				div.style.visibility = "visible";
-			}
+			e.style.left = pos2d[0]-(rect.width/2) + "px";
+			e.style.bottom = pos2d[1]-(pos2dpointer[1]>pos2d[1]?rect.height:0) + "px";
+
+			e.style["margin"] = node.margin;
+			e.style["padding"] = node.padding;
+			e.style["border"] = node.border;
+			e.style["color"] = "rgba("+node.textColor[0]+","+node.textColor[1]+","+node.textColor[2]+","+node.textColor[3]+")";
+			e.style["background-color"] = "rgba("+node.backgroundColor[0]+","+node.backgroundColor[1]+","+node.backgroundColor[2]+","+node.backgroundColor[3]+")";
+			e.style["font-family"] = node.textFontFamily;
+			e.style["font-style"] = node.textFontStyle;
+			e.style["font-size"] = node.textFontSize;
+			e.style["text-align"] = node.textAlign;
+
+			e.style.visibility = "visible";
+		}
+		e.represented = true;
+	}
+
+	for(var k of Object.keys(this._elements)){
+		if(this._elements[k].represented){
+			this._elements[k].represented = false;
+		}else{
+			this.container.removeChild(this._elements[k]);
+			delete this._elements[k];
 		}
 	}
 }
+
+Object.defineProperty(LabelRenderer.prototype, "onclick", {
+	get: function() {
+		return this._onclickcallback;
+	},
+	set: function(v) {
+		this._onclickcallback = v;
+		this._mustupdatelisteners = true;
+	},
+});
+
+Object.defineProperty(LabelRenderer.prototype, "oninput", {
+	get: function() {
+		return this._oninputcallback;
+	},
+	set: function(v) {
+		this._oninputcallback = v;
+		this._mustupdatelisteners = true;
+	},
+});
 
 /***
  * ==Volumetrics class==
@@ -1533,6 +1561,13 @@ var Volumetrics = function Volumetrics(options){
 	this.canvas.style.width = "100%";
 	this.canvas.style.height = "100%";
 	this.canvas.style["z-index"] = 1;
+	gl.captureMouse(true);
+	this.context.onmousedown = this.onmousedown.bind(this);
+	this.context.onmousemove = this.onmousemove.bind(this);
+	this.context.onmouseup = this.onmouseup.bind(this);
+	this.context.onmousewheel = this.onmousewheel.bind(this);
+	gl.captureKeys();
+	this.context.onkey = this.onkey.bind(this);
 
 	window.addEventListener("resize", this.onResize.bind(this));
 
@@ -1540,32 +1575,31 @@ var Volumetrics = function Volumetrics(options){
 
 	//Camera
 	this.camera = new RD.Camera();
+	this.initCamera();
 
 
+
+	//Renderers
 	this.layers = 0xFF;
 
-
-	//3D Renderer
 	this.renderer = new RD.Renderer(this.context);
-	this.scene = new RD.Scene();
-	//Volumes and TransferFunctions storage
 	this.volumes = {};
 	this.tfs = {};
-	//Quick access to stored nodes in scene by name
+	this.initProxyBox();
+	this.addTransferFunction(new TransferFunction(), "tf_default");
+	this.initShaders();
+	this.initJitteringTexture(1024,1024,0.5);
+
+	this.scene = new RD.Scene();
 	this.volumeNodes = {};
 	this.sceneNodes = {};
 
-
-
-	//Label renderer and storage
-	this.labelRenderer = new LabelRenderer(this.container);
-	this.labelNodes = {};
+	this.labelRenderer = new LabelRenderer(this.container);;
+	this.labelNodes = null;
 	this.labelLinesMesh = null;
-	this.labelLinesSceneNode = new RD.SceneNode();
-	this.labelLinesSceneNode.mesh = "_label_lines_mesh";
-	this.labelLinesSceneNode.flags.visible = false;
-	this.labelLinesSceneNode.primitive = GL.LINES;
-	this.addSceneNode(this.labelLinesSceneNode, "_label_lines_scene_node");
+	this.labelLinesSceneNode = null;
+	this.labelCallback = null;
+	this.initLabels();
 
 
 
@@ -1576,47 +1610,51 @@ var Volumetrics = function Volumetrics(options){
 
 
 
-	//State (for inputs)
-	this.state = {
-		mouse:{
-			left: false,
-			middle: false,
-			right: false,
-			downx: 0,
-			downy: 0,
-			downcameraposition: null,
-			downglobalposition: null,
-			upglobalpoint: null,
-			x: 0,
-			y: 0,
-			dx: 0,
-			dy: 0,
-			dwheel: 0,
-			pressed: false,
-			dragging: false,
-			wheel: false,
-		},
-		keyboard:{},
-	};
+	//State
 	this.activeMode = Volumetrics.MODES.NONE;
-
+	this.mouse = {
+		left: false,
+		middle: false,
+		right: false,
+		downx: 0,
+		downy: 0,
+		downcameraposition: null,
+		downglobalposition: null,
+		upglobalpoint: null,
+		x: 0,
+		y: 0,
+		dx: 0,
+		dy: 0,
+		dwheel: 0,
+		pressed: false,
+		dragging: false,
+		wheel: false,
+	};
+	this.keyboard = {};
 	this.measure = {
 		first: null,
 		second: null,
 		mesh: null,
 		node: null,
 	};
+	this.initMeasure();
 
-	this.picking = {
-		texture: null,
-		fbo: null,
-		callback: null,
-	};
+	this.pickingTexture = null;
+	this.pickingFBO = null;
+	this.pickingCallback = null;
+	this.initPicking();
 
+	this.fps = 0;
 	this._fps = 0;
+	setInterval(this.computeFPS.bind(this), 1000);
 
-	this.init();
 
+
+	if(this.visible){
+		this.show();
+	}else{
+		this.hide();
+	}
 }
 
 Volumetrics.MODES = {};
@@ -1628,329 +1666,25 @@ Volumetrics.MODES.CAMERAZOOM  = 11;
 Volumetrics.MODES.CAMERAORBIT = 12;
 Volumetrics.MODES.CAMERAROTATE = 13;
 
-Volumetrics.prototype.onResize = function(){
-	var rect = this.canvas.getBoundingClientRect();
-	this.canvas.width = rect.width;
-	this.canvas.height = rect.height;
-	gl.viewport(0, 0, rect.width, rect.height);
-}
-
-Volumetrics.prototype.initMeasure = function(){
-	var vertexBuffer = new Float32Array([0,0,0,0,0,0]);
-	this.measure.mesh = new Mesh(vertexBuffer);
-	this.renderer.meshes["measure_line"] = this.measure.mesh;
-
-	this.measure.node = new RD.SceneNode();
-	this.measure.node.flags.visible = false;
-	this.measure.node.primitive = GL.LINES;
-	this.measure.node.color = [1,1,0,1];
-
-	this.addSceneNode(this.measure.node, "_measureLine");
-}
-
-Volumetrics.prototype.initProxyBox = function(){
-	var options = {};
-	var buffers = {};
-	//switch orientation of faces so the front is inside
-	buffers.vertices = new Float32Array([-1,1,-1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,-1,1,-1,1,1,1,-1,1,1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,1,-1,1]);
-	buffers.normals = new Float32Array([-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0]);
-	buffers.coords = new Float32Array([0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0]);
-	buffers.wireframe = new Uint16Array([0,2, 2,5, 5,4, 4,0, 6,7, 7,10, 10,11, 11,6, 0,6, 2,7, 5,10, 4,11]);
-	options.bounding = BBox.fromCenterHalfsize( [0,0,0], [1,1,1] );
-
-
-	this.renderer.meshes["proxy_box"] = GL.Mesh.load(buffers, options);
-}
-
-Volumetrics.prototype.reloadShaders = function(){
-	this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
-}
-
-Volumetrics.prototype.createJitteringTexture = function(x, y, strength){
-	var view = new Uint8Array(x*y);
-
-	for(var i=0; i<x*y; i++){
-		view[i] = Math.floor( strength*255*Math.random() );
-	}
-
-	var texture = new GL.Texture(x, y, {texture_type: GL.TEXTURE_2D, format: gl.LUMINANCE, magFilter: gl.NEAREST, wrap: gl.REPEAT, pixel_data: view});
-	this.renderer.textures._jittering = texture;
-}
-
-Volumetrics.prototype.resetCamera = function(){
-	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
-	this.camera.lookAt( [1000,1000,1000], [0,0,0], [0,1,0] );
-}
-
-Volumetrics.prototype.init = function(){
-	this.resetCamera();
-	this.initProxyBox();
-	this.initMeasure();
-
-	//Add default tf
-	var defaultTF = new TransferFunction();
-	this.addTransferFunction(defaultTF, "tf_default");
-
-	//Load shaders
-	this.reloadShaders();
-	this.createJitteringTexture(1024,1024,0.5);
-
-	//Mouse actions
-	gl.captureMouse(true);
-	this.renderer.context.onmousedown = this.onmousedown.bind(this);
-	this.renderer.context.onmousemove = this.onmousemove.bind(this);
-	this.renderer.context.onmouseup = this.onmouseup.bind(this);
-	this.renderer.context.onmousewheel = this.onmousewheel.bind(this);
-
-	//Key actions
-	gl.captureKeys();
-	this.renderer.context.onkey = this.onkey.bind(this);
-
-	//Init visibility
-	if(this.visible){
-		this.show();
-	}else{
-		this.hide();
-	}
-
-	setInterval(this.computeFPS.bind(this), 1000);
-}
-
-Volumetrics.prototype.computeFPS = function(){
-	this.fps = this._fps;
-	this._fps = 0;
-}
-
-Volumetrics.prototype.computeProjections = function(){
-	var x = this.state.mouse.x;
-	var y = this.state.mouse.y;
-
-	var mouseScreenPosition = vec2.fromValues(x, y);
-	var mouseGlobalPosition = this.pickPosition(x, y);
-	var mouseCameraPosition = this.camera.getRayPlaneCollision(x, y, this.camera.target, vec3.negate([0,0,0], this.camera.getFront()));
-
-	return {mouseScreenPosition: mouseScreenPosition, mouseGlobalPosition: mouseGlobalPosition, mouseCameraPosition: mouseCameraPosition};
-}
-
-Volumetrics.prototype.onmousedown = function(e){
-	this.state.mouse.left = e.which == 1;
-	this.state.mouse.middle = e.which == 2;
-	this.state.mouse.right = e.which == 3;
-	this.state.mouse.downx = e.canvasx;
-	this.state.mouse.downy = e.canvasy;
-	this.state.mouse.pressed = true;
-
-	var projections = this.computeProjections();
-	this.state.mouse.downcameraposition = projections.mouseCameraPosition;
-	this.state.mouse.downglobalposition = projections.mouseGlobalPosition;
-
-	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
-		var info = projections;
-		info.down = true;
-		info.dragging = false;
-		info.up = false;
-		info.left = this.state.mouse.left;
-		info.middle = this.state.mouse.middle;
-		info.right = this.state.mouse.right;
-		this.picking.callback(info);
-	}
-}
-
-Volumetrics.prototype.onmousemove = function(e){
-	this.state.mouse.x = e.canvasx;
-	this.state.mouse.y = e.canvasy;
-	this.state.mouse.dragging = e.dragging;
-	if(this.state.mouse.dragging){
-		this.state.mouse.dx += e.deltax;
-		this.state.mouse.dy += e.deltay;
-
-		var projections = this.computeProjections();
-		this.state.mouse.cameraposition = projections.mouseCameraPosition;
-		this.state.mouse.globalposition = projections.mouseGlobalPosition;
-
-		if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
-			var info = projections;
-			info.down = false;
-			info.dragging = true;
-			info.up = false;
-			info.left = this.state.mouse.left;
-			info.middle = this.state.mouse.middle;
-			info.right = this.state.mouse.right;
-			this.picking.callback(info);
-		}
-	}
-}
-
-Volumetrics.prototype.onmouseup = function(e){
-	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.picking.callback){
-		var info = {};
-		info.mouseScreenPosition = vec2.fromValues(this.state.mouse.x, this.state.mouse.y);
-		info.mouseCameraPosition = this.state.mouse.cameraposition;
-		info.mouseGlobalPosition = this.state.mouse.globalposition;
-		info.down = false;
-		info.dragging = false;
-		info.up = true;
-		info.left = this.state.mouse.left;
-		info.middle = this.state.mouse.middle;
-		info.right = this.state.mouse.right;
-		this.picking.callback(info);
-	}
-
-	this.state.mouse.left = this.state.mouse.middle = this.state.mouse.right = false;
-	this.state.mouse.dx = 0;
-	this.state.mouse.dy = 0;
-	this.state.mouse.pressed = false;
-}
-
-Volumetrics.prototype.onmousewheel = function(e){
-	this.state.mouse.dwheel += e.wheel;
-	this.state.mouse.wheel = true;
-
-}
-
-Volumetrics.prototype.onkey = function(e){
-	if(e.eventType == "keydown"){
-		this.state.keyboard[e.key] = true;
-	}else if(e.eventType == "keyup"){
-		this.state.keyboard[e.key] = false;
-	}
-}
-
-Volumetrics.prototype.panCamera = function(targetPoint, currentPoint){
-	var delta = vec3.subtract(vec3.create(), targetPoint, currentPoint);
-	this.camera.move(delta, 1);
-}
-
-Volumetrics.prototype.zoomCamera = function(d){
-	this.camera.fov += d;
-}
-
-Volumetrics.prototype.orbitCamera = function(dtop, dright){
-	this.camera.orbit(dtop, this.camera._top);
-	var front = this.camera.getFront();
-	var up = vec3.clone(this.camera.up);
-	vec3.normalize(front, front);
-	vec3.normalize(up, up);
-	var d = vec3.dot(front, up);
-	if(!((d > 0.99 && dright > 0) || (d < -0.99 && dright < 0)))
-		this.camera.orbit(dright, this.camera._right);
-}
-
-Volumetrics.prototype.rotateCamera = function(dtop, dright){
-	this.camera.rotate(dtop, this.camera._top);
-	this.camera.rotate(dright, this.camera._right);
-}
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Main
+///////////////////////////////////////////////////////////////////////////////////////////////
 
 Volumetrics.prototype.update = function(dt){
-	var dx = this.state.mouse.dx;
-	var dy = this.state.mouse.dy;
-	var dw = this.state.mouse.dwheel;
-	this.state.mouse.dx = this.state.mouse.dy = this.state.mouse.dwheel = 0;
-
-
-	if(this.state.mouse.left){
-		switch(this.activeMode){
-			//Update camera
-			case Volumetrics.MODES.CAMERAPAN:
-				if(this.state.mouse.dragging)
-					this.panCamera(this.state.mouse.downcameraposition, this.state.cameraposition);
-				break;
-			case Volumetrics.MODES.CAMERAZOOM:
-				if(this.state.mouse.dragging)
-					this.zoomCamera(-10 * dt * dy);
-				break;
-			case Volumetrics.MODES.CAMERAORBIT:
-				if(this.state.mouse.dragging)
-					this.orbitCamera(-0.3 * dt * dx, -0.3 * dt * dy);
-				break;
-			case Volumetrics.MODES.CAMERAROTATE:
-				if(this.state.mouse.dragging)
-					this.rotateCamera(-0.3 * dt * dx, -0.3 * dt * dy);
-				break;
-		}
-	}else if(this.state.mouse.middle){
-		switch(this.activeMode){
-			//Update camera
-			case Volumetrics.MODES.NONE:
-			case Volumetrics.MODES.CAMERAPAN:
-			case Volumetrics.MODES.CAMERAZOOM:
-			case Volumetrics.MODES.CAMERAORBIT:
-			case Volumetrics.MODES.CAMERAROTATE:
-				if(this.state.mouse.dragging)
-					this.panCamera(this.state.mouse.downcameraposition, this.state.cameraposition);
-				break;
-		}
-	}else if(this.state.mouse.right){
-		switch(this.activeMode){
-			//Update camera
-			case Volumetrics.MODES.NONE:
-			case Volumetrics.MODES.CAMERAPAN:
-			case Volumetrics.MODES.CAMERAZOOM:
-			case Volumetrics.MODES.CAMERAORBIT:
-			case Volumetrics.MODES.CAMERAROTATE:
-				if(this.state.mouse.dragging)
-					this.orbitCamera(-0.3 * dt * dx, -0.3 * dt * dy);
-				break;
-		}
-	}else if(this.state.mouse.wheel){
-		switch(this.activeMode){
-			//Update camera
-			case Volumetrics.MODES.NONE:
-			case Volumetrics.MODES.CAMERAPAN:
-			case Volumetrics.MODES.CAMERAZOOM:
-			case Volumetrics.MODES.CAMERAORBIT:
-			case Volumetrics.MODES.CAMERAROTATE:
-				this.zoomCamera(-10 * dt * dw);
-				break;
-		}
-
-		this.state.mouse.wheel = 0;
-	}
-
-	if(this.camera.fov < 10) this.camera.fov = 10;
-	else if(this.camera.fov > 100) this.camera.fov = 100;
+	var dx = this.mouse.dx;
+	var dy = this.mouse.dy;
+	var dw = this.mouse.dwheel;
 
 	//Update tfs textures
 	for(var k of Object.keys(this.tfs)){
 		this.tfs[k].update();
 	}
 
-	//Update label lines
-	var labels = Object.values(this.labelNodes);
-	if(labels.length){
-		var visibleNodes = [];
-		for(var node of labels){
-			if(node.flags.visible === false || !(node.layers & this.layers)){
-				continue;
-			}
-			visibleNodes.push(node);
-		}
-
-		if(visibleNodes.length){
-			var vertices = new Float32Array(visibleNodes.length * 6);
-
-			for(var i=0; i<visibleNodes.length; i++){
-				vertices.set(node.position, i*6);
-				vertices.set(node.pointerPosition, i*6 + 3);
-			}
-
-			if(this.labelLinesMesh == null){
-				var buffer = new GL.Buffer(gl.ARRAY_BUFFER, vertices, 3, gl.STREAM_DRAW);
-				this.labelLinesMesh = new GL.Mesh();
-				this.labelLinesMesh.addBuffer("vertices", buffer);
-				this.renderer.meshes["_label_lines_mesh"] = this.labelLinesMesh;
-
-			}else{
-				this.labelLinesMesh.updateVertexBuffer("vertices", "a_vertex", 3, vertices);
-			}
-
-			this.labelLinesSceneNode.flags.visible = true;
-		}
-	}else{
-		this.labelLinesSceneNode.flags.visible = false;
-	}
-
+	this.updateCamera(dt);
+	this.updateLabels(dt);
 	this.scene.update(dt);
+
+	this.mouse.dx = this.mouse.dy = this.mouse.dwheel = 0;
 }
 
 
@@ -1963,10 +1697,8 @@ Volumetrics.prototype.render = function(){
 	this.renderer.render(this.scene, this.camera, null, this.layers);
 	gl.disable(gl.DEPTH_TEST);
 
-	this.labelRenderer.render(Object.values(this.labelNodes), this.camera, this.layers);
-
 	//render Labels
-
+	this.labelRenderer.render(Object.values(this.labelNodes), this.camera, this.layers);
 }
 
 Volumetrics.prototype.animate = function(){
@@ -1995,6 +1727,266 @@ Volumetrics.prototype.hide = function(){
 	this.canvas.style.display = "none";
 }
 
+Volumetrics.prototype.onResize = function(){
+	var rect = this.canvas.getBoundingClientRect();
+	this.canvas.width = rect.width;
+	this.canvas.height = rect.height;
+	gl.viewport(0, 0, rect.width, rect.height);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// State
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+Volumetrics.prototype.computeFPS = function(){
+	this.fps = this._fps;
+	this._fps = 0;
+}
+
+Volumetrics.prototype.computeCameraProjection = function(x, y, point){
+	return this.camera.getRayPlaneCollision(x, y, point, this.camera.getFront());
+}
+
+Volumetrics.prototype.computeProjections = function(){
+	var x = this.mouse.x;
+	var y = this.mouse.y;
+
+	var mouseScreenPosition = vec2.fromValues(x, y);
+	var mouseGlobalPosition = this.pickPosition(x, y);
+	var mouseCameraPosition = this.camera.getRayPlaneCollision(x, y, this.camera.target, this.camera.getFront());
+
+	return {mouseScreenPosition: mouseScreenPosition, mouseGlobalPosition: mouseGlobalPosition, mouseCameraPosition: mouseCameraPosition};
+}
+
+Volumetrics.prototype.onmousedown = function(e){
+	this.mouse.left = e.which == 1;
+	this.mouse.middle = e.which == 2;
+	this.mouse.right = e.which == 3;
+	this.mouse.downx = e.canvasx;
+	this.mouse.downy = e.canvasy;
+	this.mouse.pressed = true;
+
+	var projections = this.computeProjections();
+	this.mouse.downcameraposition = this.mouse.cameraposition = projections.mouseCameraPosition;
+	this.mouse.downglobalposition = this.mouse.globalposition = projections.mouseGlobalPosition;
+
+	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.pickingCallback){
+		var info = projections;
+		info.down = true;
+		info.dragging = false;
+		info.up = false;
+		info.left = this.mouse.left;
+		info.middle = this.mouse.middle;
+		info.right = this.mouse.right;
+		this.pickingCallback(info);
+	}
+}
+
+Volumetrics.prototype.onmousemove = function(e){
+	this.mouse.x = e.canvasx;
+	this.mouse.y = e.canvasy;
+	this.mouse.dragging = e.dragging;
+	if(this.mouse.dragging){
+		this.mouse.dx += e.deltax;
+		this.mouse.dy += e.deltay;
+
+		var projections = this.computeProjections();
+		this.mouse.cameraposition = projections.mouseCameraPosition;
+		this.mouse.globalposition = projections.mouseGlobalPosition;
+
+		if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.pickingCallback){
+			var info = projections;
+			info.down = false;
+			info.dragging = true;
+			info.up = false;
+			info.left = this.mouse.left;
+			info.middle = this.mouse.middle;
+			info.right = this.mouse.right;
+			this.pickingCallback(info);
+		}
+	}
+}
+
+Volumetrics.prototype.onmouseup = function(e){
+	if(this.activeMode == Volumetrics.MODES.PICKPOSITION && this.pickingCallback){
+		var info = {};
+		info.mouseScreenPosition = vec2.fromValues(this.mouse.x, this.mouse.y);
+		info.mouseCameraPosition = this.mouse.cameraposition;
+		info.mouseGlobalPosition = this.mouse.globalposition;
+		info.down = false;
+		info.dragging = false;
+		info.up = true;
+		info.left = this.mouse.left;
+		info.middle = this.mouse.middle;
+		info.right = this.mouse.right;
+		this.pickingCallback(info);
+	}
+
+	this.mouse.left = this.mouse.middle = this.mouse.right = false;
+	this.mouse.dx = 0;
+	this.mouse.dy = 0;
+	this.mouse.pressed = false;
+}
+
+Volumetrics.prototype.onmousewheel = function(e){
+	this.mouse.dwheel += e.wheel;
+	this.mouse.wheel = true;
+
+}
+
+Volumetrics.prototype.onkey = function(e){
+	if(e.eventType == "keydown"){
+		this.keyboard[e.key] = true;
+	}else if(e.eventType == "keyup"){
+		this.keyboard[e.key] = false;
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Camera
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+Volumetrics.prototype.initCamera = function(){
+	if(this.camera == null) this.camera = new RD.Camera();
+	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
+	this.camera.lookAt( [1000,1000,1000], [0,0,0], [0,1,0] );
+}
+
+Volumetrics.prototype.panCamera = function(targetPoint, currentPoint){
+	var delta = vec3.subtract(vec3.create(), targetPoint, currentPoint);
+	this.camera.move(delta, 1);
+}
+
+Volumetrics.prototype.zoomCamera = function(d){
+	this.camera.fov += d;
+}
+
+Volumetrics.prototype.orbitCamera = function(dtop, dright){
+	this.camera.orbit(dtop, this.camera._top);
+	var front = this.camera.getFront();
+	var up = vec3.clone(this.camera.up);
+	vec3.normalize(front, front);
+	vec3.normalize(up, up);
+	var d = vec3.dot(front, up);
+	if(!((d > 0.99 && dright > 0) || (d < -0.99 && dright < 0)))
+		this.camera.orbit(dright, this.camera._right);
+}
+
+Volumetrics.prototype.rotateCamera = function(dtop, dright){
+	this.camera.rotate(dtop, this.camera._top);
+	this.camera.rotate(dright, this.camera._right);
+}
+
+Volumetrics.prototype.updateCamera = function(dt){
+	var dx = this.mouse.dx;
+	var dy = this.mouse.dy;
+	var dw = this.mouse.dwheel;
+
+	if(this.mouse.left){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.CAMERAPAN:
+				if(this.mouse.dragging)
+					this.panCamera(this.mouse.downcameraposition, this.mouse.cameraposition);
+				break;
+			case Volumetrics.MODES.CAMERAZOOM:
+				if(this.mouse.dragging)
+					this.zoomCamera(-10 * dt * dy);
+				break;
+			case Volumetrics.MODES.CAMERAORBIT:
+				if(this.mouse.dragging)
+					this.orbitCamera(-0.3 * dt * dx, -0.3 * dt * dy);
+				break;
+			case Volumetrics.MODES.CAMERAROTATE:
+				if(this.mouse.dragging)
+					this.rotateCamera(-0.3 * dt * dx, -0.3 * dt * dy);
+				break;
+		}
+	}else if(this.mouse.middle){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.NONE:
+			case Volumetrics.MODES.CAMERAPAN:
+			case Volumetrics.MODES.CAMERAZOOM:
+			case Volumetrics.MODES.CAMERAORBIT:
+			case Volumetrics.MODES.CAMERAROTATE:
+				if(this.mouse.dragging)
+					this.panCamera(this.mouse.downcameraposition, this.mouse.cameraposition);
+				break;
+		}
+	}else if(this.mouse.right){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.NONE:
+			case Volumetrics.MODES.CAMERAPAN:
+			case Volumetrics.MODES.CAMERAZOOM:
+			case Volumetrics.MODES.CAMERAORBIT:
+			case Volumetrics.MODES.CAMERAROTATE:
+				if(this.mouse.dragging)
+					this.orbitCamera(-0.3 * dt * dx, -0.3 * dt * dy);
+				break;
+		}
+	}else if(this.mouse.wheel){
+		switch(this.activeMode){
+			//Update camera
+			case Volumetrics.MODES.NONE:
+			case Volumetrics.MODES.CAMERAPAN:
+			case Volumetrics.MODES.CAMERAZOOM:
+			case Volumetrics.MODES.CAMERAORBIT:
+			case Volumetrics.MODES.CAMERAROTATE:
+				this.zoomCamera(-10 * dt * dw);
+				break;
+		}
+
+		this.mouse.wheel = 0;
+	}
+
+	if(this.camera.fov < 10) this.camera.fov = 10;
+	else if(this.camera.fov > 100) this.camera.fov = 100;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Shaders
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+Volumetrics.prototype.initShaders = function(){
+	this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
+}
+
+//Useful for showing possible "modes"
+Volumetrics.prototype.getShaders = function(){
+	return this.renderer.shaders;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Volumes
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+Volumetrics.prototype.initProxyBox = function(){
+	var options = {};
+	var buffers = {};
+	//switch orientation of faces so the front is inside
+	buffers.vertices = new Float32Array([-1,1,-1,-1,1,1,-1,-1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,1,1,1,-1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,-1,1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,1,1,-1,1,1,1,-1,1,-1,1,1,1,-1,1,1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1,-1,-1,-1,1,1,-1,1]);
+	buffers.normals = new Float32Array([-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0]);
+	buffers.coords = new Float32Array([0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,1,0,0,1,0]);
+	buffers.wireframe = new Uint16Array([0,2, 2,5, 5,4, 4,0, 6,7, 7,10, 10,11, 11,6, 0,6, 2,7, 5,10, 4,11]);
+	options.bounding = BBox.fromCenterHalfsize( [0,0,0], [1,1,1] );
+
+
+	this.renderer.meshes["proxy_box"] = GL.Mesh.load(buffers, options);
+}
+
+Volumetrics.prototype.initJitteringTexture = function(x, y, strength){
+	var view = new Uint8Array(x*y);
+
+	for(var i=0; i<x*y; i++){
+		view[i] = Math.floor( strength*255*Math.random() );
+	}
+
+	var texture = new GL.Texture(x, y, {texture_type: GL.TEXTURE_2D, format: gl.LUMINANCE, magFilter: gl.NEAREST, wrap: gl.REPEAT, pixel_data: view});
+	this.renderer.textures._jittering = texture;
+}
+
 Volumetrics.prototype.addVolume = function(volume, name){
 	name = name || ("volume_" + Object.keys(this.volumes).length);
 
@@ -2010,6 +2002,7 @@ Volumetrics.prototype.addVolume = function(volume, name){
 
 	this.volumes[name] = volume;
 	this.renderer.textures[name] = volume.getDataTexture();
+	return name;
 }
 
 Volumetrics.prototype.getVolume = function(name){
@@ -2020,10 +2013,33 @@ Volumetrics.prototype.getVolumes = function(){
 	return this.volumes;
 }
 
+Volumetrics.prototype.removeVolume = function(name){
+	delete this.volumes[name];
+	delete this.renderer.textures[name];
+}
+
+Volumetrics.prototype.renameVolume = function(name, newname){
+	newname = this.addVolume(this.getVolume(name), newname);
+
+	for(var node of Object.values(this.volumeNodes)){
+		if(node.volume == name){
+			node.volume = newname;
+		}
+	}
+	this.removeVolume(name);
+
+	return newname;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// TransferFunctions
+///////////////////////////////////////////////////////////////////////////////////////////////
+
 Volumetrics.prototype.addTransferFunction = function(tf, name){
 	name = name || ("tf_" + Object.keys(this.tfs).length);
 	this.tfs[name] = tf;
 	this.renderer.textures[name] = tf.getTexture();
+	return name;
 }
 
 Volumetrics.prototype.getTransferFunction = function(name){
@@ -2034,67 +2050,190 @@ Volumetrics.prototype.getTransferFunctions = function(){
 	return this.tfs;
 }
 
-//Useful for showing possible "modes"
-Volumetrics.prototype.getShaders = function(){
-	return this.renderer.shaders;
+Volumetrics.prototype.removeTransferFunction = function(name){
+	delete this.tfs[name];
+	delete this.renderer.textures[name];
 }
 
-Volumetrics.prototype.addSceneNode = function(node, name){
-	if(node instanceof VolumeNode) this.addVolumeNode(node, name);
+Volumetrics.prototype.renameTransferFunction = function(name, newname){
+	newname = this.addTransferFunction(this.getTransferFunction(name), newname);
 
-	name = name || ("sn_" + Object.keys(this.sceneNodes).length);
-
-	if( this.sceneNodes[name] === undefined ){
-		this.sceneNodes[name] = node;
-		this.scene._root.addChild(node);
-	}else{
-		var oldNode = this.sceneNodes[name];
-		for(var i=0; i<this.scene._root.children.length; i++){
-			if(this.scene._root.children[i] == oldNode){
-				this.scene._root.children[i] = node;
-			}
+	for(var node of Object.values(this.volumeNodes)){
+		if(node.tf == name){
+			node.tf = newname;
 		}
 	}
+	this.removeTransferFunction(name);
 
-	return name;
+	return newname;
 }
 
-Volumetrics.prototype.addVolumeNode = function(node, name){
-	name = name || ("vn_" + Object.keys(this.volumeNodes).length);
+///////////////////////////////////////////////////////////////////////////////////////////////
+// SceneNodes
+///////////////////////////////////////////////////////////////////////////////////////////////
 
+Volumetrics.prototype.addSceneNode = function(node){
+	if(node instanceof VolumeNode) this.addVolumeNode(node);
+	if(node instanceof LabelNode) this.addLabelNode(node);
+
+	this.sceneNodes[node._uid] = node;
+	this.scene._root.addChild(node);
+	return node._uid;
+}
+
+Volumetrics.prototype.getSceneNode = function(uid){
+	return this.sceneNodes[uid];
+}
+
+Volumetrics.prototype.removeSceneNode = function(uid){
+	if(this.sceneNodes[uid]){
+		this.scene._to_destroy.push(this.sceneNodes[uid]);
+		delete this.sceneNodes[uid];
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// VolumeNodes
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+Volumetrics.prototype.addVolumeNode = function(node){
 	node.background = this.background;
 	node.levelOfDetail = this.levelOfDetail;
 
 	var volume = this.volumes[node.volume];
 	node.setVolumeUniforms(volume);
 
-	if( this.volumeNodes[name] === undefined ){
-		this.volumeNodes[name] = node;
-		this.scene._root.addChild(node);
-	}else{
-		var oldNode = this.volumeNodes[name];
-		for(var i=0; i<this.scene._root.children.length; i++){
-			if(this.scene._root.children[i] == oldNode){
-				this.scene._root.children[i] = node;
-			}
+	this.volumeNodes[node._uid] = node;
+	this.scene._root.addChild(node);
+	return node._uid;
+}
+
+Volumetrics.prototype.getVolumeNode = function(uid){
+	return this.volumeNodes[uid];
+}
+
+Volumetrics.prototype.removeVolumeNode = function(uid){
+	if(this.volumeNodes[uid]){
+		this.scene._to_destroy.push(this.volumeNodes[uid]);
+		delete this.volumeNodes[uid];
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////
+// LabelNodes
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+Volumetrics.prototype.initLabels = function(){
+	this.labelRenderer.oninput = this.onLabelNodeInput.bind(this);
+	this.labelRenderer.onclick = this.onLabelNodeClick.bind(this);
+
+	this.labelNodes = {};
+
+	this.labelLinesMesh = null;
+	this.labelLinesSceneNode = new RD.SceneNode();
+	this.labelLinesSceneNode.mesh = "_label_lines_mesh";
+	this.labelLinesSceneNode.flags.visible = false;
+	this.labelLinesSceneNode.primitive = GL.LINES;
+	this.addSceneNode(this.labelLinesSceneNode, "_label_lines_scene_node");
+
+	this.labelCallback = null;
+}
+
+Volumetrics.prototype.addLabelNode = function(node){
+	this.labelNodes[node._uid] = node;
+	return node._uid;
+}
+
+Volumetrics.prototype.getLabelNode = function(uid){
+	return this.labelNodes[uid];
+}
+
+Volumetrics.prototype.removeLabelNode = function(uid){
+	if(this.labelNodes[uid]){
+		delete this.labelNodes[uid];
+	}
+}
+
+Volumetrics.prototype.onLabelNodeInput = function(event){
+	var uid = event.target.uid;
+	var node = this.getLabelNode(uid);
+	node.text = event.target.value;
+	if(this.labelCallback){
+		var info = {};
+		info.click = false;
+		info.input = true;
+		info.uid = uid;
+		info.labelNode = node;
+		this.labelCallback(info);
+	}
+}
+
+Volumetrics.prototype.onLabelNodeClick = function(event){
+	var uid = event.target.uid;
+	var node = this.getLabelNode(uid);
+	if(this.labelCallback){
+		var info = {};
+		info.click = true;
+		info.input = false;
+		info.uid = uid;
+		info.labelNode = node;
+		this.labelCallback(info);
+	}
+}
+
+Volumetrics.prototype.updateLabels = function(dt){
+	var visibleNodes = [];
+	for(var k of Object.keys(this.labelNodes)){
+		var node = this.labelNodes[k];
+		if(node.flags.visible === false || !(node.layers & this.layers)){
+			continue;
 		}
+		visibleNodes.push(node);
 	}
 
-	return name;
+	if(visibleNodes.length){
+		var vertices = new Float32Array(visibleNodes.length * 6);
+
+		for(var i=0; i<visibleNodes.length; i++){
+			vertices.set(visibleNodes[i].position, i*6);
+			vertices.set(visibleNodes[i].pointerPosition, i*6 + 3);
+		}
+
+		if(this.labelLinesMesh == null){
+			var buffer = new GL.Buffer(gl.ARRAY_BUFFER, vertices, 3, gl.STREAM_DRAW);
+			this.labelLinesMesh = new GL.Mesh();
+			this.labelLinesMesh.addBuffer("vertices", buffer);
+			this.renderer.meshes["_label_lines_mesh"] = this.labelLinesMesh;
+
+		}else{
+			this.labelLinesMesh.updateVertexBuffer("vertices", "a_vertex", 3, vertices);
+		}
+
+		this.labelLinesSceneNode.flags.visible = true;
+	}else{
+		this.labelLinesSceneNode.flags.visible = false;
+	}
 }
 
-Volumetrics.prototype.getVolumeNode = function(name){
-	return this.volumeNodes[name];
+Volumetrics.prototype.initMeasure = function(){
+	var vertexBuffer = new Float32Array([0,0,0,0,0,0]);
+	this.measure.mesh = new Mesh(vertexBuffer);
+	this.renderer.meshes["measure_line"] = this.measure.mesh;
+
+	this.measure.node = new RD.SceneNode();
+	this.measure.node.flags.visible = false;
+	this.measure.node.primitive = GL.LINES;
+	this.measure.node.color = [1,1,0,1];
+
+	this.addSceneNode(this.measure.node);
 }
 
-Volumetrics.prototype.addLabelNode = function(node, name){
-	name = name || ("ln_" + Object.keys(this.volumeNodes).length);
-	this.labelNodes[name] = node;
-	return name;
-}
+///////////////////////////////////////////////////////////////////////////////////////////////
+// Picking
+///////////////////////////////////////////////////////////////////////////////////////////////
 
-Volumetrics.prototype.getLabelNode = function(name){
-	return this.labelNodes[name];
+Volumetrics.prototype.initPicking = function(){
+	this.getFBO();
 }
 
 //Creates an FBO if there is none or if canvas size has changed. Returns the fbo
@@ -2102,16 +2241,16 @@ Volumetrics.prototype.getFBO = function(){
 	var needFBO = false;
 
 	//Texture does not exist or does not have correct size, must be done/redone
-	if(this.picking.texture == null || this.picking.texture.width != this.canvas.width || this.picking.texture.height != this.canvas.height){
-		this.picking.texture = new GL.Texture(this.canvas.width, this.canvas.height, { format: gl.RGBA, type: gl.FLOAT, magFilter: gl.LINEAR,  });
+	if(this.pickingTexture == null || this.pickingTexture.width != this.canvas.width || this.pickingTexture.height != this.canvas.height){
+		this.pickingTexture = new GL.Texture(this.canvas.width, this.canvas.height, { format: gl.RGBA, type: gl.FLOAT, magFilter: gl.LINEAR,  });
 		needFBO = true;
 	}
 
-	if(this.picking.fbo == null || needFBO){
-		this.picking.fbo = new GL.FBO([this.picking.texture]);
+	if(this.pickingFBO == null || needFBO){
+		this.pickingFBO = new GL.FBO([this.pickingTexture]);
 	}
 
-	return this.picking.fbo;
+	return this.pickingFBO;
 }
 
 //Get the {x, y, z} world position that the mouse {x, y} is pointing
@@ -2132,9 +2271,7 @@ Volumetrics.prototype.pickPosition = function(x, y){
 	gl.scissor(x, y, 1, 1);
 	gl.clearColor(0,0,0,0);	//If later alpha channel equals 0 it's a discard or outside volume, no point in volume is picked
 
-	for(var v of Object.keys(this.volumeNodes)){
-		var node = this.volumeNodes[v];
-
+	for(var node of Object.values(this.volumeNodes)){
 		//Change shader temporaly
 		var usedShader = node.shader;
 		node.shader = "volumetric_picking";
@@ -2170,7 +2307,7 @@ Volumetrics.prototype.pickPosition = function(x, y){
 }
 
 Volumetrics.prototype.setPickPositionCallback = function(f){
-	this.picking.callback = f;
+	this.pickingCallback = f;
 }
 
 //Setters apply to all volumeNodes
@@ -2180,8 +2317,8 @@ Object.defineProperty(Volumetrics.prototype, "background", {
 	},
 	set: function(v) {
 		this._background = v;
-		for(var k of Object.keys(this.volumeNodes)){
-		this.volumeNodes[k].background = this.background;
+		for(var node of Object.values(this.volumeNodes)){
+		node.background = this.background;
 		}
 	},
 });
@@ -2192,8 +2329,8 @@ Object.defineProperty(Volumetrics.prototype, "levelOfDetail", {
 	},
 	set: function(v) {
 		this._levelOfDetail = v;
-		for(var k of Object.keys(this.volumeNodes)){
-		this.volumeNodes[k].levelOfDetail = this.levelOfDetail;
+		for(var node of Object.values(this.volumeNodes)){
+		node.levelOfDetail = this.levelOfDetail;
 		}
 	},
 });
@@ -2204,8 +2341,8 @@ Object.defineProperty(Volumetrics.prototype, "shader", {
 	},
 	set: function(v) {
 		this._shader = v;
-		for(var k of Object.keys(this.volumeNodes)){
-		this.volumeNodes[k].shader = this.shader;
+		for(var node of Object.values(this.volumeNodes)){
+		node.shader = this.shader;
 		}
 	},
 });
@@ -2216,8 +2353,8 @@ Object.defineProperty(Volumetrics.prototype, "cuttingPlaneActive", {
 	},
 	set: function(v) {
 		this._cuttingPlaneActive = v;
-		for(var k of Object.keys(this.volumeNodes)){
-		this.volumeNodes[k].cuttingPlaneActive = this.cuttingPlaneActive;
+		for(var node of Object.values(this.volumeNodes)){
+		node.cuttingPlaneActive = this.cuttingPlaneActive;
 		}
 	},
 });
@@ -2228,8 +2365,8 @@ Object.defineProperty(Volumetrics.prototype, "cuttingPlaneZ", {
 	},
 	set: function(v) {
 		this._cuttingPlaneZ = v;
-		for(var k of Object.keys(this.volumeNodes)){
-		this.volumeNodes[k].cuttingPlaneZ = this.cuttingPlaneZ;
+		for(var node of Object.values(this.volumeNodes)){
+		node.cuttingPlaneZ = this.cuttingPlaneZ;
 		}
 	},
 });

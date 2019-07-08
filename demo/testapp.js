@@ -1,18 +1,15 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////
-// DATA
+// MAIN
 ///////////////////////////////////////////////////////////////////////////////////////////////
-var app = {
-    volumes: [],
 
-    volumetrics: null,
-    tfeditor: null,
-
-    testPicking: true,
-};
+var volumetrics = null;
+var tfeditor = null;
+var volumes = [];
+var appMode = "none";
 
 function init(){
     var container = document.getElementById("volumetrics");
-    app.volumetrics = new Volumetrics({container: container, visible: true, background: [0.3,0.3,0.3,1]});
+    volumetrics = new Volumetrics({container: container, visible: true, background: [0.3,0.3,0.3,1]});
 
 	var tf = new TransferFunction();
     tf.points = [{x:0.35,r:0,g:0,b:0,a:0.001}, {x:0.4,r:0,g:1,b:0,a:0.001}, {x:0.7,r:1,g:0,b:0,a:0.3}, {x:0.9,r:0,g:0.8,b:0.9,a:0.6}];
@@ -22,12 +19,14 @@ function init(){
     tf._needUpdate = true;
 
     var tfecontainer = document.getElementById("tfeditor");
-    app.tfeditor = new TFEditor({container: tfecontainer, visible: true});
-	app.tfeditor.setTF(tf);
+    tfeditor = new TFEditor({container: tfecontainer, visible: true});
+	tfeditor.setTF(tf);
 
-    app.volumetrics.addTransferFunction(tf, "mytf");
+    volumetrics.addTransferFunction(tf, "mytf");
 
-    app.volumetrics.setPickPositionCallback(onPicking);
+    volumetrics.setPickPositionCallback(onPicking);
+
+    volumetrics.activeMode = Volumetrics.MODES.CAMERAORBIT;
 }
 init();
 
@@ -38,61 +37,113 @@ var toolCameraOrbit = document.getElementById("toolCameraOrbit");
 var toolCameraRotate = document.getElementById("toolCameraRotate");
 var toolCameraReset = document.getElementById("toolCameraReset");
 var toolTestPicking = document.getElementById("toolTestPicking");
+var toolAnnotation = document.getElementById("toolAnnotation");
 
 toolCameraNone.addEventListener("click", function(){
-    app.volumetrics.activeMode = Volumetrics.MODES.NONE;
+    volumetrics.activeMode = Volumetrics.MODES.NONE;
 }, false);
 
 toolCameraPan.addEventListener("click", function(){
-    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAPAN;
+    volumetrics.activeMode = Volumetrics.MODES.CAMERAPAN;
 }, false);
 
 toolCameraZoom.addEventListener("click", function(){
-    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAZOOM;
+    volumetrics.activeMode = Volumetrics.MODES.CAMERAZOOM;
 }, false);
 
 toolCameraOrbit.addEventListener("click", function(){
-    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAORBIT;
+    volumetrics.activeMode = Volumetrics.MODES.CAMERAORBIT;
 }, false);
 
 toolCameraRotate.addEventListener("click", function(){
-    app.volumetrics.activeMode = Volumetrics.MODES.CAMERAROTATE;
+    volumetrics.activeMode = Volumetrics.MODES.CAMERAROTATE;
 }, false);
 
 toolCameraReset.addEventListener("click", function(){
-    app.volumetrics.resetCamera();
+    volumetrics.initCamera();
 }, false);
 
 toolTestPicking.addEventListener("click", function(){
-    app.volumetrics.activeMode = Volumetrics.MODES.PICKPOSITION;
+    volumetrics.activeMode = Volumetrics.MODES.PICKPOSITION;
+    appMode = "testPick";
+}, false);
+
+toolAnnotation.addEventListener("click", function(){
+    volumetrics.activeMode = Volumetrics.MODES.PICKPOSITION;
+    appMode = "annotation";
+}, false);
+
+toolRemoveAnnotation.addEventListener("click", function(){
+    volumetrics.activeMode = Volumetrics.MODES.NONE;
+    appMode = "removeAnnotation";
 }, false);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
-// Testing
+// Labels
 ///////////////////////////////////////////////////////////////////////////////////////////////
-function testLabels(){
-    var labelNode = new LabelNode();
-    labelNode.text = "Hola Javi!!!"
-    labelNode.pointerPosition = [-100,100,100];
-    app.volumetrics.labelNodes.test = labelNode;
+
+var labelNode = null;
+
+function onLabelInfo(info){
+    if(info.click){
+        if(appMode == "removeAnnotation"){
+            volumetrics.removeLabelNode(info.uid);
+        }
+    }else if(info.input){
+        //console.log("Text changed! ", info.labelNode.text);
+    }
 }
-testLabels();
+volumetrics.labelCallback = onLabelInfo;
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Picking
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
+var downpick = null;
+var movepick = null;
+var uppick = null;
 function onPicking(info){
-    if(info.up && info.mouseGlobalPosition != null){
-        var sceneNode = new RD.SceneNode();
-        sceneNode.mesh = "sphere";
-        sceneNode.position = info.mouseGlobalPosition;
-        sceneNode.color = [1, 1, 0];
+    if(info.down){
+        downpick = info;
 
-        app.volumetrics.addSceneNode(sceneNode);
+        if(downpick.left == true){
+            if(appMode == "annotation" && info.mouseGlobalPosition && labelNode == null){
+                labelNode = new LabelNode();
+                labelNode.text = "...";
+                labelNode.pointerPosition = vec3.clone(info.mouseGlobalPosition);
+                labelNode.position = vec3.clone(info.mouseGlobalPosition);
+                volumetrics.addLabelNode(labelNode);
+            }
+        }
+    }
+    else if(info.dragging){
+        movepick = info;
+
+        if(appMode == "annotation" && labelNode != null){
+            var delta = vec3.subtract(vec3.create(), movepick.mouseCameraPosition, downpick.mouseCameraPosition);
+            labelNode.position = vec3.add(vec3.create(), labelNode.pointerPosition, delta);
+        }
+    }
+    else if(info.up){
+        uppick = info;
+
+        if(appMode == "annotation" && labelNode != null){
+            labelNode = null;
+        }
+
+        if(appMode === "testPick" && info.mouseGlobalPosition != null){
+            var sceneNode = new RD.SceneNode();
+            sceneNode.mesh = "sphere";
+            sceneNode.position = info.mouseGlobalPosition;
+            sceneNode.color = [1, 1, 0];
+
+            volumetrics.addSceneNode(sceneNode);
+        }
     }
 }
-app.volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
+volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Shaders
@@ -100,25 +151,25 @@ app.volumetrics.renderer.meshes["sphere"] = GL.Mesh.sphere({radius:5});
 
 var shaderDefault = document.getElementById("shaderDefault");
 var onShaderDefault = function(event){
-    app.volumetrics.shader = "volumetric_default";
+    volumetrics.shader = "volumetric_default";
 }
 shaderDefault.addEventListener("click", onShaderDefault, false);
 
 var shaderXRAY = document.getElementById("shaderXRAY");
 var onShaderXRAY = function(event){
-    app.volumetrics.shader = "volumetric_xray";
+    volumetrics.shader = "volumetric_xray";
 }
 shaderXRAY.addEventListener("click", onShaderXRAY, false);
 
 var shaderMIP = document.getElementById("shaderMIP");
 var onShaderMIP = function(event){
-    app.volumetrics.shader = "volumetric_mip";
+    volumetrics.shader = "volumetric_mip";
 }
 shaderMIP.addEventListener("click", onShaderMIP, false);
 
 var shaderPicking = document.getElementById("shaderPicking");
 var onShaderPicking = function(event){
-    app.volumetrics.shader = "volumetric_picking";
+    volumetrics.shader = "volumetric_picking";
 }
 shaderPicking.addEventListener("click", onShaderPicking, false);
 
@@ -128,13 +179,13 @@ shaderPicking.addEventListener("click", onShaderPicking, false);
 
 var cuttingONInput = document.getElementById("cuttingON");
 var onCuttingONOFF = function(event){
-    app.volumetrics.cuttingPlaneActive = cuttingONInput.checked;
+    volumetrics.cuttingPlaneActive = cuttingONInput.checked;
 }
 cuttingONInput.addEventListener("click", onCuttingONOFF, false);
 
 var cuttingSliderInput = document.getElementById("cuttingSlider");
 var onCuttingSlider = function(event){
-    app.volumetrics.cuttingPlaneZ = cuttingSliderInput.value;
+    volumetrics.cuttingPlaneZ = cuttingSliderInput.value;
 }
 cuttingSliderInput.addEventListener("input", onCuttingSlider, false);
 
@@ -158,16 +209,16 @@ function onVolume(response){
         console.log("Volume loaded.");
 
         for(var v of response.volumes){
-            app.volumes.push(v);
+            volumes.push(v);
         }
 
         var volume = response.volume;
-        app.volumetrics.addVolume(volume, "importvol");
+        volumetrics.addVolume(volume, "importvol");
 
         var node = importVolumeNode;
         node.volume = "importvol";
         node.tf = "mytf";
-        app.volumetrics.addVolumeNode(node, "importnode");
+        volumetrics.addVolumeNode(node);
 
     }else if(response.status == VolumeLoader.ERROR){
         console.log("Error: ", response.explanation);
@@ -233,98 +284,108 @@ var mathON = false;
 var mathONInput = document.getElementById("mathON");
 var mathFuncInput = document.getElementById("mathFunc");
 var mathSetButton = document.getElementById("mathSet");
+var mathVolume = null;
+var mathNode = null;
+var mathFunc = null;
+var mathCode = null;
+var mathScope = null;
+var mathWidth = 1;
+var mathHeight = 1;
+var mathDepth = 1;
+var mathBytes = 1;
+var mathTotalBytes = 1;
+var mathBuffer = null;
+var mathView = null;
 
 var mathInit = function(){
-    app.math = {
-        volume: null,
-        node: new VolumeNode(),
-        func: "x+y+z",
-        code: null,
-        width: 1,
-        height: 1,
-        depth: 1,
-        bytes: 1,
-        totalbytes: 1,
-        buffer: null,
-        view: null,
-
-    }
+    mathVolume = null;
+    mathNode = new VolumeNode();
+    mathFunc = "x+y+z";
+    mathScope = null;
+    mathCode = null;
+    mathWidth = 1;
+    mathHeight = 1;
+    mathDepth = 1;
+    mathBytes = 1;
+    mathTotalBytes = 1;
+    mathBuffer = null;
+    mathView = null;
 
     mathSetDimensions(128, 128, 128, 1);
 
-    app.math.node.volume = "mathVolume";
-    app.math.node.tf = "mytf";
-    app.math.node.hide();
-    app.volumetrics.addVolumeNode(app.math.node, "mathVolumeNode");
+    mathNode.volume = "mathVolume";
+    mathNode.tf = "mytf";
+    mathNode.hide();
+    volumetrics.addVolumeNode(mathNode);
 
-    app.math.func = "1 - (x^2 + y^2 + z^2)/3";
-    mathFuncInput.value = app.math.func;
+    mathFunc = "1 - (x^2 + y^2 + z^2)/3";
+    mathFuncInput.value = mathFunc;
 }
 
 var mathSetDimensions = function(width, height, depth, bytes){
-    var preBytes = app.math.totalbytes;
+    var preBytes = mathTotalBytes;
     var totalbytes = width*height*depth*bytes;
 
-    app.math.width = width;
-    app.math.height = height;
-    app.math.depth = depth;
-    app.math.bytes = bytes;
-    app.math.totalbytes = totalbytes;
+    mathWidth = width;
+    mathHeight = height;
+    mathDepth = depth;
+    mathBytes = bytes;
+    mathTotalBytes = totalbytes;
 
-    if(app.math.buffer && preBytes == totalbytes) return;
+    if(mathBuffer && preBytes == totalbytes) return;
 
-    app.math.buffer = new ArrayBuffer(totalbytes);
+    mathBuffer = new ArrayBuffer(totalbytes);
     if(bytes == 1){
-        app.math.view = new Uint8Array(app.math.buffer);
+        mathView = new Uint8Array(mathBuffer);
     }else if(bytes == 2){
-        app.math.view = new Float32Array(app.math.buffer);
+        mathView = new Float32Array(mathBuffer);
     }else if(bytes == 4){
-        app.math.view = new Float32Array(app.math.buffer);
+        mathView = new Float32Array(mathBuffer);
     }else{
         console.log("bytes value not valid in mathSetDimensions, it must be 1, 2 or 4.");
-        app.math.buffer = null;
+        mathBuffer = null;
         return;
     }
 
-    app.math.volume = Volume.create(width, height, depth, {voxelDepth: bytes*8}, app.math.buffer);
-    app.volumetrics.addVolume(app.math.volume, "mathVolume");
+    mathVolume = Volume.create(width, height, depth, {voxelDepth: bytes*8}, mathBuffer);
+    volumetrics.addVolume(mathVolume, "mathVolume");
 }
 
 var onMathONOFF = function(event){
     if(mathONInput.checked == false){
-        app.math.node.hide();
+        mathNode.hide();
     }else{
-        app.math.node.show();
+        mathNode.show();
     }
 }
 
 var onMathFuncSet = function(event){
-    app.math.func = mathFuncInput.value;
-    app.math.code = math.compile(app.math.func);
-    app.math.scope = {x: 0, y: 0, z: 0, t: 0};
+    mathFunc = mathFuncInput.value;
+    mathCode = math.compile(mathFunc);
+    mathScope = {x: 0, y: 0, z: 0, t: 0};
 
     mathComputeValues();
 }
 
 var mathComputeValues = function(){
     var s;
-    if(app.math.bytes == 1){
+    if(mathBytes == 1){
         s = 255;
-    }else if(app.math.bytes == 2){
+    }else if(mathBytes == 2){
         s = 1;
-    }else if(app.math.bytes == 4){
+    }else if(mathBytes == 4){
         s = 1;
     }else{
         console.log("bytes value not valid in mathComputeValues, it must be 1, 2 or 4.");
         return;
     }
 
-    var code = app.math.code;
-    var scope = app.math.scope;
+    var code = mathCode;
+    var scope = mathScope;
 
-    var w = app.math.width;
-    var h = app.math.height;
-    var d = app.math.depth;
+    var w = mathWidth;
+    var h = mathHeight;
+    var d = mathDepth;
 
     var ww = w/2;
     var hh = h/2;
@@ -338,12 +399,12 @@ var mathComputeValues = function(){
                 scope.z = (k-d/2)/dd;
                 var val = code.evaluate(scope);
                 val *= s;
-                app.math.view[i + j*w + k*w*h] = val;
+                mathView[i + j*w + k*w*h] = val;
             }
         }
     }
 
-    app.math.volume.uploadDataTexture();
+    mathVolume.uploadDataTexture();
 }
 
 mathInit();
