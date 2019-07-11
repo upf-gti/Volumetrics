@@ -4,36 +4,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
     <style type="text/css">
-        #webglcanvas{
-            width: 800px;
-            height: 600px;
-        }
     </style>
 </head>
-<body>
-<div class="container">
-    <div id=toolbox style="width: 100vw; height: 20px;">
+<body style="margin: 0;">
+<div>
+    <div id=toolbox style="width: 100vw; height: 20px; padding: 5px; background: #607d8b;">
         <div style="float: left; width: 30%; height: 1px;"></div>
-        <button id="toolCameraNone">None</button>
-        <a>|</a>
         <button id="toolCameraPan">Pan</button>
         <button id="toolCameraZoom">Zoom</button>
         <button id="toolCameraOrbit">Orbit</button>
         <button id="toolCameraRotate">Rotate</button>
         <button id="toolCameraReset">Reset Camera</button>
-        <a>|</a>
+        <span>|</span>
         <button id="toolTestPicking">Test Picking</button>
         <button id="toolAnnotation">Annotate</button>
         <button id="toolRemoveAnnotation">Remove</button>
-        <a>|</a>
+        <span>|</span>
         <button id="shaderDefault">Normal</button>
-        <button id="shaderXRAY">XRAY</button>
-        <button id="shaderMIP">MIP</button>
+        <!--<button id="shaderXRAY">XRAY</button>
+        <button id="shaderMIP">MIP</button>-->
         <button id="shaderPicking">Picking</button>
     </div>
 
-    <div id=visualizer style="width: 100vw; height: calc(100vh - 20px);">
-        <div id="leftBar" style="float: left; width: 30%;">
+    <div id=visualizer style="width: 100vw; height: calc(100vh - 30px);">
+        <div id="leftBar" style="float: left; width: calc(30% - 10px); height: 100%; padding-left:5px; padding-right:5px; background: #eceff1;">
             <div>
                 <p>Volume from import <input id="importON" type="checkbox" checked="true"></p>
                 <p>Dicom folder: <input id="dicomInput" type="file" webkitdirectory directory multiple/></p>
@@ -48,15 +42,19 @@
                 <button id="mathSet">Set</button>
             </div>
             <hr>
+            <p>Transfer Function Editor</p>
+            <div id="tfeditor" style="">
+                <!--tfeditor creates a 2d canvas here-->
+            </div>
+            <span>Presets</span>
+            <button id="preset1">1</button>
+            <button id="preset2">2</button>
+            <button id="preset3">3</button>
+            <hr>
             <div>
                 <p>Cutting Plane</p>
                 <input id="cuttingON" type="checkbox">
                 <input id="cuttingSlider" type="range" min="-1000" max="1000" value="0">
-            </div>
-            <hr>
-            <p>Transfer Function Editor</p>
-            <div id="tfeditor" style="">
-                <!--tfeditor creates a 2d canvas here-->
             </div>
         </div>
         <div id="volumetrics" style="float: right; width: 70%; height: 100%;">

@@ -647,7 +647,7 @@ TransferFunction.create = function(width, points){
 	var tf = new TransferFunction();
 
 	tf.width = width;
-	tf.points = points.slice(0);	//Clone array instead of copying reference
+	tf.points = JSON.parse(JSON.stringify(points));	//Clone array instead of copying reference
 
 	return tf;
 }
@@ -1846,13 +1846,17 @@ Volumetrics.prototype.onkey = function(e){
 // Camera
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-Volumetrics.prototype.initCamera = function(){
+Volumetrics.prototype.initCamera = function(fov, pos, target){
 	if(this.camera == null) this.camera = new RD.Camera();
-	this.camera.perspective( 45, gl.canvas.width / gl.canvas.height, 1, 10000 );
-	this.camera.lookAt( [1000,1000,1000], [0,0,0], [0,1,0] );
+	fov = fov || 45;
+	pos = pos || [1000,1000,1000];
+	target = target || [0,0,0];
+	this.camera.perspective( fov, gl.canvas.width / gl.canvas.height, 1, 10000 );
+	this.camera.lookAt( pos, target, [0,1,0] );
 }
 
 Volumetrics.prototype.panCamera = function(targetPoint, currentPoint){
+	if(currentPoint == undefined) return;
 	var delta = vec3.subtract(vec3.create(), targetPoint, currentPoint);
 	this.camera.move(delta, 1);
 }
@@ -1887,7 +1891,8 @@ Volumetrics.prototype.updateCamera = function(dt){
 			//Update camera
 			case Volumetrics.MODES.CAMERAPAN:
 				if(this.mouse.dragging)
-					this.panCamera(this.mouse.downcameraposition, this.mouse.cameraposition);
+					var campos = this.camera.getRayPlaneCollision(this.mouse.x, this.mouse.y, this.camera.getFront());
+					this.panCamera(this.mouse.downcameraposition, campos);
 				break;
 			case Volumetrics.MODES.CAMERAZOOM:
 				if(this.mouse.dragging)
@@ -1911,7 +1916,8 @@ Volumetrics.prototype.updateCamera = function(dt){
 			case Volumetrics.MODES.CAMERAORBIT:
 			case Volumetrics.MODES.CAMERAROTATE:
 				if(this.mouse.dragging)
-					this.panCamera(this.mouse.downcameraposition, this.mouse.cameraposition);
+					var campos = this.camera.getRayPlaneCollision(this.mouse.x, this.mouse.y, this.camera.target, this.camera.getFront());
+					this.panCamera(this.mouse.downcameraposition, campos);
 				break;
 		}
 	}else if(this.mouse.right){

@@ -6,17 +6,14 @@ var volumetrics = null;
 var tfeditor = null;
 var volumes = [];
 var appMode = "none";
+var tf = null;
 
 function init(){
     var container = document.getElementById("volumetrics");
-    volumetrics = new Volumetrics({container: container, visible: true, background: [0.3,0.3,0.3,1]});
+    volumetrics = new Volumetrics({container: container, visible: true, background: [0.9,0.9,0.9,1]});
 
-	var tf = new TransferFunction();
-    tf.points = [{x:0.35,r:0,g:0,b:0,a:0.001}, {x:0.4,r:0,g:1,b:0,a:0.001}, {x:0.7,r:1,g:0,b:0,a:0.3}, {x:0.9,r:0,g:0.8,b:0.9,a:0.6}];
-    tf._needUpdate = true;
-
-    tf.points = [{x:0,r:0,g:1,b:0,a:0.002}, {x:1,r:0,g:0,b:1,a:1}];
-    tf._needUpdate = true;
+	tf = new TransferFunction();
+    onPreset1();
 
     var tfecontainer = document.getElementById("tfeditor");
     tfeditor = new TFEditor({container: tfecontainer, visible: true});
@@ -30,7 +27,6 @@ function init(){
 }
 init();
 
-var toolCameraNone = document.getElementById("toolCameraNone");
 var toolCameraPan = document.getElementById("toolCameraPan");
 var toolCameraZoom = document.getElementById("toolCameraZoom");
 var toolCameraOrbit = document.getElementById("toolCameraOrbit");
@@ -38,10 +34,6 @@ var toolCameraRotate = document.getElementById("toolCameraRotate");
 var toolCameraReset = document.getElementById("toolCameraReset");
 var toolTestPicking = document.getElementById("toolTestPicking");
 var toolAnnotation = document.getElementById("toolAnnotation");
-
-toolCameraNone.addEventListener("click", function(){
-    volumetrics.activeMode = Volumetrics.MODES.NONE;
-}, false);
 
 toolCameraPan.addEventListener("click", function(){
     volumetrics.activeMode = Volumetrics.MODES.CAMERAPAN;
@@ -77,6 +69,30 @@ toolRemoveAnnotation.addEventListener("click", function(){
     volumetrics.activeMode = Volumetrics.MODES.NONE;
     appMode = "removeAnnotation";
 }, false);
+
+
+var preset1 = document.getElementById("preset1");
+var preset2 = document.getElementById("preset2");
+var preset3 = document.getElementById("preset3");
+
+preset1.addEventListener("click", onPreset1, false);
+preset2.addEventListener("click", onPreset2, false);
+preset3.addEventListener("click", onPreset3, false);
+
+function onPreset1(){
+    tf.points = [{"x":0.15885416666666666,"r":1,"g":1,"b":1,"a":0},{"x":0.2109375,"r":1,"g":1,"b":1,"a":0.005},{"x":0.2578125,"r":1,"g":0.548,"b":0,"a":0.01},{"x":0.8463541666666666,"r":1,"g":0,"b":0,"a":0.068},{"x":0.8854166666666666,"r":0,"g":0,"b":0,"a":0}];
+    tf._needUpdate = true;
+}
+
+function onPreset2(){
+    tf.points = [{x:0.3,r:0,g:1,b:0,a:0.002}, {x:1,r:0,g:0,b:1,a:1}];
+    tf._needUpdate = true;
+}
+
+function onPreset3(){
+    tf.points = [{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:0.5}, {x:0.55,r:0,g:0,b:0,a:0}];
+    tf._needUpdate = true;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Labels
@@ -154,7 +170,7 @@ var onShaderDefault = function(event){
     volumetrics.shader = "volumetric_default";
 }
 shaderDefault.addEventListener("click", onShaderDefault, false);
-
+/*
 var shaderXRAY = document.getElementById("shaderXRAY");
 var onShaderXRAY = function(event){
     volumetrics.shader = "volumetric_xray";
@@ -166,7 +182,7 @@ var onShaderMIP = function(event){
     volumetrics.shader = "volumetric_mip";
 }
 shaderMIP.addEventListener("click", onShaderMIP, false);
-
+*/
 var shaderPicking = document.getElementById("shaderPicking");
 var onShaderPicking = function(event){
     volumetrics.shader = "volumetric_picking";
