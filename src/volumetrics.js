@@ -882,8 +882,6 @@ TFEditor.prototype._onMouseUp = function(event){
 }
 
 TFEditor.prototype._onMouseMove = function(event){
-	this.state.prevx = this.state.x;
-	this.state.prevy = this.state.y;
 	//Coordinates in [0-255] int range
 	var total_canvas_size = this._canvas_res + 2*this._canvas_margin;
 	this.state.x = Math.clamp(Math.round((total_canvas_size-1) * event.layerX / this._width) - this._canvas_margin, 0, this._canvas_res-1);
@@ -919,28 +917,31 @@ TFEditor.prototype.loop = function(){
 }
 
 TFEditor.prototype.update = function(){
-	if(!this.state.dragging || !this.state.channel) return;
-	
-	//change values
-	var c = (this.state.channel == "r" ? 0 : this.state.channel == "g" ? 1 : this.state.channel == "b" ? 2 : 3);
-	var lx = this.state.prevx;
-	var ly = this.state.prevy;
-	var rx = this.state.x+1;
-	var ry = this.state.y+1;
-	if(rx < lx){
-		lx = this.state.x;
-		ly = this.state.y;
-		rx = this.state.prevx+1;
-		ry = this.state.prevy+1;
+	if(this.state.dragging && this.state.channel){
+		//change values
+		var c = (this.state.channel == "r" ? 0 : this.state.channel == "g" ? 1 : this.state.channel == "b" ? 2 : 3);
+		var lx = this.state.prevx;
+		var ly = this.state.prevy;
+		var rx = this.state.x+1;
+		var ry = this.state.y+1;
+		if(rx < lx){
+			lx = this.state.x;
+			ly = this.state.y;
+			rx = this.state.prevx+1;
+			ry = this.state.prevy+1;
+		}
+		//+1 on r values to prevent dividing by 0
+		var transfer_function = this.tf.getTransferFunction();
+		for(var i=lx; i<rx; i++){
+			var f = (i-lx)/(rx-lx);
+			f /= 255;
+			transfer_function[i*4+c] = Math.round(ly + f*(ry-ly));
+		}
+		this.tf._needUpload = true;
 	}
-	//+1 on r values to prevent dividing by 0
-	var transfer_function = this.tf.getTransferFunction();
-	for(var i=lx; i<rx; i++){
-		var f = (i-lx)/(rx-lx);
-		f /= 255;
-		transfer_function[i*4+c] = Math.round(ly + f*(ry-ly));
-	}
-	this.tf._needUpload = true;
+
+	this.state.prevx = this.state.x;
+	this.state.prevy = this.state.y;
 }
 
 TFEditor.prototype.render = function(){
