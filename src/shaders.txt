@@ -81,8 +81,14 @@ vec4 getVoxel( in vec3 p ){
     return texture( u_volume_texture, p );
 }
 
+float random (vec2 st) {
+    return fract(sin(dot(st.xy,
+                         vec2(12.9898,78.233)))*
+        43758.5453123);
+}
+
 float jitteringFactor( vec2 p ){
-    return texture(u_jittering_texture, p.xy/100.0).x;
+    return random(p);
 }
 
 float pointDepth( in vec3 p ){
@@ -100,6 +106,7 @@ float pointDepth( in vec3 p ){
     ro = rayOrigin(ro, rd);
     vec3 rs = ro;   //Ray sample
     rd = normalize(rd) * (1.0 / u_levelOfDetail);
+    float d = length(rd);
 
 // Initialize cdest vec4 to store color
     cdest = vec4(0.0,0.0,0.0,0.0);
@@ -124,7 +131,7 @@ float pointDepth( in vec3 p ){
 
 \fragment_compositing_basic
     csrc = vec4(csrc.xyz * csrc.w, csrc.w); //transparency, applied this way to avoid color bleeding
-    cdest = csrc * (1.0 - cdest.w) + cdest; //compositing with previous value
+    cdest = d * csrc * (1.0 - cdest.w) + cdest; //compositing with previous value
 
 \fragment_compositing_xray
     cdest = csrc * (1.0 - cdest.w) + cdest;

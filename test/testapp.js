@@ -27,6 +27,15 @@ function init(){
 }
 init();
 
+var urlpart = window.location.href.split("/");
+var url = "";
+for(var i=0; i<urlpart.length-1; i++){
+    url += urlpart[i] + "/";
+}
+var vlurl = url + "texture3d.vl";
+
+downloadVL(vlurl);
+
 var toolCameraPan = document.getElementById("toolCameraPan");
 var toolCameraZoom = document.getElementById("toolCameraZoom");
 var toolCameraOrbit = document.getElementById("toolCameraOrbit");
@@ -80,18 +89,15 @@ preset2.addEventListener("click", onPreset2, false);
 preset3.addEventListener("click", onPreset3, false);
 
 function onPreset1(){
-    tf.points = [{"x":0.15885416666666666,"r":1,"g":1,"b":1,"a":0},{"x":0.2109375,"r":1,"g":1,"b":1,"a":0.005},{"x":0.2578125,"r":1,"g":0.548,"b":0,"a":0.01},{"x":0.8463541666666666,"r":1,"g":0,"b":0,"a":0.068},{"x":0.8854166666666666,"r":0,"g":0,"b":0,"a":0}];
-    tf._needUpdate = true;
+    tf.fromPoints([{"x":0.15885416666666666,"r":1,"g":1,"b":1,"a":0},{"x":0.2109375,"r":1,"g":1,"b":1,"a":0.2},{"x":0.2578125,"r":1,"g":0.548,"b":0,"a":0.3},{"x":0.8463541666666666,"r":1,"g":0,"b":0,"a":0.5},{"x":0.8854166666666666,"r":0,"g":0,"b":0,"a":0}]);
 }
 
 function onPreset2(){
-    tf.points = [{x:0.3,r:0,g:1,b:0,a:0.002}, {x:1,r:0,g:0,b:1,a:1}];
-    tf._needUpdate = true;
+    tf.fromPoints([{x:0.3,r:0,g:1,b:0,a:0.1}, {x:1,r:0,g:0,b:1,a:1}]);
 }
 
 function onPreset3(){
-    tf.points = [{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:0.5}, {x:0.55,r:0,g:0,b:0,a:0}];
-    tf._needUpdate = true;
+    tf.fromPoints([{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:1}, {x:0.55,r:0,g:0,b:0,a:0}]);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -278,9 +284,10 @@ function handleVLInput(event){
 var vlInput = document.getElementById("vlInput");
 vlInput.addEventListener("change", handleVLInput, false);
 
-function downloadVLExample(){
-    console.log("Downloading example...");
-    fetch("https://webglstudio.org/users/mfloriach/volumetrics/demo/texture3d.vl")
+function downloadVL(vlurl){
+    vlurl = vlurl || "https://webglstudio.org/users/mfloriach/volumetrics/demo/texture3d.vl";
+    console.log("Downloading VL from " + vlurl + "...");
+    fetch(vlurl)
         .then(function(response) {
             return response.arrayBuffer();
         })
@@ -290,12 +297,12 @@ function downloadVLExample(){
         });
 };
 var vlExampleButton = document.getElementById("vlExample");
-vlExampleButton.addEventListener("click", downloadVLExample);
+vlExampleButton.addEventListener("click", downloadVL);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Math
 ///////////////////////////////////////////////////////////////////////////////////////////////
-
+/*
 var mathON = false;
 var mathONInput = document.getElementById("mathON");
 var mathFuncInput = document.getElementById("mathFunc");
@@ -427,3 +434,4 @@ mathInit();
 
 mathONInput.addEventListener("click", onMathONOFF, false);
 mathSetButton.addEventListener("click", onMathFuncSet, false);
+*/

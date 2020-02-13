@@ -626,71 +626,32 @@ VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
 
 /***
  * ==TransferFunction class==
- * Represents a TransferFunction composed by segments
+ * Represents a RGBA TransferFunction (1 byte per value)
  ***/
 var TransferFunction = function TransferFunction(){
 	this.width = 256;
 
-	//RGBA points
-	this.points = [{x:0,r:0,g:0,b:0,a:0}, {x:1,r:1,g:1,b:1,a:1}];
-
-
 	this._buffer = null;
 	this._view = null;
-	this._needUpdate = false;
-
 	this._texture = null;
 	this._needUpload = false;
+
+	this.init();
 }
 
-TransferFunction.create = function(width, points){
-	var tf = new TransferFunction();
-
-	tf.width = width;
-	tf.points = JSON.parse(JSON.stringify(points));	//Clone array instead of copying reference
-
-	return tf;
-}
-
-TransferFunction.clone = function(tf){
-	return TransferFunction.create(tf.width, tf.points);
-}
-
-TransferFunction.prototype.sort = function(){
-	this.points.sort(function(a,b){
-		if(a.x < b.x) return -1;
-		if(a.x > b.x) return 1;
-		return 0;
-	});
-	this._needUpdate = true;
-}
-
-TransferFunction.prototype.clean = function(){
-	this.sort();
-
-	var count = 0;
-	for(var p of this.points){
-		if(p.x < 0) count++;
-	}
-	this.points.splice(0,count);
-	this._needUpdate = true;
-}
-
-TransferFunction.prototype.initTransferFunction = function(){
-	//Delete if they existed:
-	this._buffer = null;
-	this._view = null;
-
-	//Create arraybuffer with addecuate size (delete previous one)
+TransferFunction.prototype.init = function(values){
+	//Create arraybuffer with addecuate size (deletes previous data)
 	this._buffer = new ArrayBuffer(this.width * 4);
 	this._view = new Uint8Array(this._buffer);
+	if(values)
+		this._view.set(values, 0);
+
 }
 
-TransferFunction.prototype.updateTransferFunction = function(){
+TransferFunction.prototype.fromPoints = function(points){
 	//Fill buffer data
 	var i, t, r, g, b, a;
 	i = t = r = g = b = a = 0;
-	var points = this.points;
 
 	for(var pos=0; pos<4*this.width; pos+=4){
 		var pos_01 = pos / (this.width-1) / 4;
@@ -716,10 +677,9 @@ TransferFunction.prototype.updateTransferFunction = function(){
 				a = points[i].a;
 			}else{
 				t = (pos_01-points[i-1].x)/(points[i].x-points[i-1].x);
-				//Pow and sqrt because real color is value^2
-				r = Math.sqrt( (1-t) * Math.pow(points[i-1].r, 2) + t * Math.pow(points[i].r, 2) );
-				g = Math.sqrt( (1-t) * Math.pow(points[i-1].g, 2) + t * Math.pow(points[i].g, 2) );
-				b = Math.sqrt( (1-t) * Math.pow(points[i-1].b, 2) + t * Math.pow(points[i].b, 2) );
+				r = (1-t)*points[i-1].r + t*points[i].r;
+				g = (1-t)*points[i-1].g + t*points[i].g;
+				b = (1-t)*points[i-1].b + t*points[i].b;
 				a = (1-t)*points[i-1].a + t*points[i].a;
 			}
 		}
@@ -730,37 +690,29 @@ TransferFunction.prototype.updateTransferFunction = function(){
 		this._view[pos+3] = Math.round(a * (this.width-1));
 	}
 
-	this._needUpdate = false;
 	this._needUpload = true;
 }
 
 TransferFunction.prototype.update = function(){
-	if(this._needUpdate){
-		this.updateTransferFunction();
-	}
-
 	if(this._needUpload){
 		this.updateTexture();
 	}
 }
 
+TransferFunction.prototype.updateTexture = function(){
+	if(this._texture != null){
+		//Update texture data in GPU
+		this._texture.uploadData(this._view, {}, false);
+		this._needUpload = false;
+	}
+}
+
 TransferFunction.prototype.getTransferFunction = function(){
-	if(this._buffer == null){
-		this.initTransferFunction();
-		this.updateTransferFunction();
-	}
-
-	if(this._needUpdate){
-		this.updateTransferFunction();
-	}
-
 	return this._view;
 }
 
 TransferFunction.prototype.getTexture = function(){
 	if(this._texture == null){
-		this.getTransferFunction();
-
 		//Create GLTexture using that arraybuffer
 		this._texture = new GL.Texture(this.width, 1, {texture_type: GL.TEXTURE_2D, format: gl.RGBA, magFilter: gl.NEAREST, pixel_data: this._view});
 		this._needUpload = false;
@@ -773,12 +725,17 @@ TransferFunction.prototype.getTexture = function(){
 	return this._texture;
 }
 
-TransferFunction.prototype.updateTexture = function(){
-	if(this._texture != null){
-		//Update texture data in GPU
-		this._texture.uploadData(this._view, {}, false);
-		this._needUpload = false;
-	}
+TransferFunction.create = function(width, values){
+	var tf = new TransferFunction();
+
+	tf.width = width || tf.width;
+	tf.init();
+
+	return tf;
+}
+
+TransferFunction.clone = function(tf){
+	return TransferFunction.create(tf.width, tf._view);
 }
 
 /***
@@ -800,29 +757,29 @@ var TFEditor = function TFEditor(options){
 
 	var rect = options.container.getBoundingClientRect();
 	this._width = rect.width;
-	this._height = 20;
+	this._height = rect.width*0.7;
 	this._middle = 0.2;
 	this._r = 5;
 
+	this._canvas_res = 256;
+	this._canvas_margin = 5;
+
 	this.ctx = null;
+	this.canvas = null;
 
 	//Inputs and canvas
 	this.domElements = {};
 	this.initDivs();
 
-	
-
 	//State
-	this.mouse = {
+	this.state = {
 		x: 0,
 		y: 0,
-		downx: 0,
-		downy: 0,
+		prevx: 0,
+		prevy: 0,
 		draging: false,
-		dragged: false,
+		channel: null,
 	};
-	this.previousSelectedUp = null;
-	this.selected = null;
 
 	//TF to edit and histogram to show
 	this.tf = null;
@@ -844,17 +801,13 @@ TFEditor.prototype.setSize = function(w, h){
 	this._width = w || this._width;
 	this._height = h || this._height;
 
+	this.ctx.canvas.width = this._canvas_res + 2*this._canvas_margin;
+	this.ctx.canvas.height = this.ctx.canvas.width;
+
 	var textWidth = "50px";
 	var sliderWidth = "calc(100% - 60px)";
 
-	this.domElements.canvas.width = this._width;
-	this.domElements.canvas.height = this._height;
 	this.domElements.canvas.style.height = this._height + "px";
-
-	for(var c of ["r", "g", "b", "a"]){
-		this.domElements["text_"+c].style.width = textWidth;
-		this.domElements["slider_"+c].style.width = sliderWidth;
-	}
 }
 
 TFEditor.prototype.removeDivs = function(){
@@ -872,6 +825,8 @@ TFEditor.prototype.initDivs = function(newcontainer){
 
 	var canvas = document.createElement("canvas");
 	canvas.style.width = "100%";
+	canvas.style.display = "table";
+	canvas.style.margin = "0 auto";
 	this.domElements.canvas = canvas;
 	this.container.appendChild(canvas);
 
@@ -885,50 +840,28 @@ TFEditor.prototype.initDivs = function(newcontainer){
 	canvas.addEventListener("mouseleave", this._onMouseLeave.bind(this));
 	this.ctx = this.domElements.canvas.getContext("2d");
 
+	var div = document.createElement("div");
+	div.style.width = "90%";
+	div.style.height = "20px";
+	div.style.margin = "0 auto";
+	div.style.padding = "0";
+	div.style.display = "table";
+	this.domElements["buttons_div"] = div;
+
 	for(var c of ["r", "g", "b", "a"]){
-		var div = document.createElement("div");
-		div.style.width = "100%";
-		div.style.height = "20px";
-		div.style.margin = "0";
-		div.style.padding = "0";
-		this.domElements["div_"+c] = div;
+		var button = document.createElement("button");
+		button.id = "TFEditor_button_"+c;
+		button.innerText = c;
+		button.style.margin = "0 auto";
+		this.domElements["button_"+c] = button;
 
-		var text = document.createElement("span");
-		text.style.width = "50px";
-		text.style["font-family"] = "Courier New";
-		text.style["font-size"] = "12px";
-		text.style.float = "left";
-		text.style.margin = "0";
-		text.style["margin-right"] = "3px";
-		text.style.padding = "0";
-		text.id = "TFEditor_text_"+c;
-		this.domElements["text_"+c] = text;
-
-		var slider = document.createElement("input");
-		slider.type = "range";
-		slider.min = 0;
-		slider.max = 1;
-		slider.step = 0.001;
-		slider.value = 0.5;
-		slider.style.float = "right";
-		slider.style.margin = "0";
-		slider.style["margin-left"] = "3px";
-		slider.style["margin-right"] = "3px";
-		slider.style.padding = "0";
-		slider.id = "TFEditor_slider_"+c;
-		slider.disabled = true;
-		this.domElements["slider_"+c] = slider;
-
-		//Append to div and to container
-		div.appendChild(text);
-		div.appendChild(slider);
-		this.container.appendChild(div);
+		div.appendChild(button);
 
 		//Set listeners
-		slider.addEventListener("input", this._onSliderChange.bind(this));
+		button.addEventListener("click", this._onButtonClick.bind(this));
 	}
+	this.container.appendChild(div);
 
-	this.disableInputs(true);
 	this.setSize();
 }
 
@@ -936,68 +869,35 @@ TFEditor.prototype._onResize = function(event){
 	this.setSize();
 }
 
-TFEditor.prototype._onSliderChange = function(event){
-	var id = event.target.id;
-	var val = event.target.value;
-	var c = id[id.length-1];
-	var v = Math.max(Math.min(parseFloat(val), 1), 0);
-
-	this.modify(c, v);
-	this.setInputs(this.selected);
+TFEditor.prototype._onButtonClick = function(event){
+	this.state.channel = event.target.innerText;
 }
 
 TFEditor.prototype._onMouseDown = function(event){
-	this.mouse.dragging = true;
-	var x = this.mouse.downx = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
-	var y = this.mouse.downy = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
-
-	this.select(x);
-
-	if(this.selected == null){
-		if(Math.abs( this.mouse.y - 0.5 ) < this._middle/2 )
-			this.create(x);
-	}
+	this.state.dragging = true;
 }
 
 TFEditor.prototype._onMouseUp = function(event){
-	var x = this.mouse.x;
-	var y = this.mouse.y;
-
-	var s = this.selected;
-	this.select(x);
-	var selectedUp = this.selected;
-
-	if(!this.mouse.dragged && this.previousSelectedUp == selectedUp){
-		this.remove();
-	}
-
-	this.mouse.dragging = false;
-	this.mouse.dragged = false;
-	this.selected = s;
-	this.previousSelectedUp = selectedUp;
-
-	return false;
+	this.state.dragging = false;
 }
 
 TFEditor.prototype._onMouseMove = function(event){
-	var x = this.mouse.x = Math.min(Math.max(event.layerX, 0), this._width) / this._width;
-	var y = this.mouse.y = 1 - Math.min(Math.max(event.layerY, 0), this._height) / this._height;
-
-	if(this.mouse.dragging && this.selected){
-		this.mouse.dragged = true;
-		this.moveTo(x);
-	}
+	this.state.prevx = this.state.x;
+	this.state.prevy = this.state.y;
+	//Coordinates in [0-255] int range
+	var total_canvas_size = this._canvas_res + 2*this._canvas_margin;
+	this.state.x = Math.clamp(Math.round((total_canvas_size-1) * event.layerX / this._width) - this._canvas_margin, 0, this._canvas_res-1);
+	this.state.y = Math.clamp(Math.round((total_canvas_size-1) * (1 - event.layerY / this._height)) - this._canvas_margin, 0, this._canvas_res-1);
 }
 
 TFEditor.prototype._onMouseLeave = function(event){
-	this.mouse.dragging = false;
-	this.mouse.dragged = false;
+	this.state.dragging = false;
 }
 
 TFEditor.prototype.show = function(){
 	this.visible = true;
 	this.container.style.display = "block";
-	this.render();
+	this.loop();
 }
 
 TFEditor.prototype.hide = function(){
@@ -1009,175 +909,107 @@ TFEditor.prototype.setTF = function(tf){
 	this.tf = tf;
 }
 
-TFEditor.prototype.disableInputs = function(b){
-	for(var c of ["r", "g", "b", "a"]){
-		this.domElements["text_"+c].innerText = c + ": -";
-		this.domElements["slider_"+c].disabled = b;
+TFEditor.prototype.loop = function(){
+	if(this.visible){
+		requestAnimationFrame( this.loop.bind(this) );
+		this.setSize();
+		this.update();
+		this.render();
 	}
 }
 
-TFEditor.prototype.setInputs = function(p){
-	if(this.tf == null) return null;
-
-	this.disableInputs(false);
-	for(var c of ["r", "g", "b", "a"]){
-		this.domElements["text_"+c].innerText = c + ":" + Math.floor( p[c] * 1000 ) / 1000;
-		this.domElements["slider_"+c].value = p[c];
+TFEditor.prototype.update = function(){
+	if(!this.state.dragging || !this.state.channel) return;
+	
+	//change values
+	var c = (this.state.channel == "r" ? 0 : this.state.channel == "g" ? 1 : this.state.channel == "b" ? 2 : 3);
+	var lx = this.state.prevx;
+	var ly = this.state.prevy;
+	var rx = this.state.x+1;
+	var ry = this.state.y+1;
+	if(rx < lx){
+		lx = this.state.x;
+		ly = this.state.y;
+		rx = this.state.prevx+1;
+		ry = this.state.prevy+1;
 	}
-}
-
-TFEditor.prototype.select = function(x){
-	if(this.tf == null) return null;
-
-	var r = this._r / this._width;
-	this.unselect();
-
-	for(var p of this.tf.points){
-		if(p.x >= x-r && p.x <= x+r){
-			this.selected = p;
-			this.setInputs(p);
-			break;
-		}
+	//+1 on r values to prevent dividing by 0
+	var transfer_function = this.tf.getTransferFunction();
+	for(var i=lx; i<rx; i++){
+		var f = (i-lx)/(rx-lx);
+		f /= 255;
+		transfer_function[i*4+c] = Math.round(ly + f*(ry-ly));
 	}
+	this.tf._needUpload = true;
 }
 
-TFEditor.prototype.unselect = function(){
-	this.selected = null;
-	this.disableInputs(true);
-}
-
-TFEditor.prototype.moveTo = function(x){
+TFEditor.prototype.render = function(){
 	if(this.tf == null) return null;
 
-	if(this.selected != null){
-		this.selected.x = x;
-		this.tf.sort();
-	}
-
-	if(this.selected.length > 0){
-		for(var p of this.selected){
-			p.x = x;
-			p.y = y;
-		}
-
-		this.tf.sort();
-	}
-}
-
-TFEditor.prototype.create = function(x){
-	if(this.tf == null) return null;
-
-	var transferFunction = this.tf.getTransferFunction();
-
-	var l = this.tf.width - 1;
-	var i = 4*Math.round( x*l );
-	var r = transferFunction[i]   / l;
-	var g = transferFunction[i+1] / l;
-	var b = transferFunction[i+2] / l;
-	var a = transferFunction[i+3] / l;
-
-	var p = {x:x, r:r, g:g, b:b, a:a };
-
-	this.tf.points.push(p);
-	this.tf.sort();
-
-	this.selected = p;
-	this.setInputs(p);
-}
-
-TFEditor.prototype.remove = function(){
-	if(this.tf == null) return null;
-
-	if(this.selected != null){
-		this.selected.x = -1;
-		this.tf.clean();
-		this.unselect();
-	}
-}
-
-TFEditor.prototype.modify = function(c, v){
-	if(this.tf == null) return null;
-
-	if(this.selected){
-		this.selected[c] = v;
-		this.tf._needUpdate = true;
-	}
-}
-
-TFEditor.prototype.drawTF = function(){
-	if(this.tf == null) return null;
+	var ctx = this.ctx;
 
 	var w = this._width;
 	var h = this._height;
 
-	var hh = h/2;
-
-	var hline = h*this._middle;
-	var hdraw = hh-hline/2;
-
+	var real_to_canvas_width = this._canvas_res/w;
+	var real_to_canvas_height = this._canvas_res/h;
 
 	//Clear canvas
-	var ctx = this.ctx;
 	ctx.fillStyle = "rgb(255,255,255)";
-	ctx.fillRect(0,0,w,h);
+	ctx.fillRect(this._canvas_margin,this._canvas_margin,this._canvas_res,this._canvas_res);
 
 	//Transparency squares
+	/*var square_size = 5;
+	var square_canvas_width = square_size * real_to_canvas_width;
+	var square_canvas_height = square_size * real_to_canvas_height;
+
 	ctx.fillStyle = "rgb(200,200,200)";
-	var sqs = (hdraw) / 2;
-	for(var i=0; i<w/sqs+2; i++){
-		ctx.fillRect(i*sqs, hline+hdraw+(i%2)*sqs, sqs, sqs);
-	}
+	for(var i=0; i<this._canvas_res/square_canvas_width; i++){
+		for(var j=0; j<this._canvas_res/square_canvas_height; j++){
+			if((i+j)%2 == 0) ctx.fillRect(this._canvas_margin + i*square_canvas_width, this._canvas_margin + j*square_canvas_height, square_canvas_width, square_canvas_height);
+		}
+	}*/
 
 	//TF
-	var transferFunction = this.tf.getTransferFunction();
-	
-	var l = this.tf.width - 1;
-	var s = l/(w-1);
-	
-	for(var i=0; i<w; i++){
-		var pos = Math.round(i*s)*4;
-
-		var r = transferFunction[pos];
-		var g = transferFunction[pos+1];
-		var b = transferFunction[pos+2];
-		var a = transferFunction[pos+3]/l;
-
-		ctx.fillStyle = "rgb("+r+","+g+","+b+")";
-		ctx.fillRect(i,0,1,hdraw);
-		ctx.fillStyle = "rgba("+r+","+g+","+b+","+a+")";
-		ctx.fillRect(i,hdraw+hline,1,hdraw);
-		ctx.fillStyle = "rgb(0,0,0)";
-		ctx.fillRect(i,hdraw,1,hline);
+	var transfer_function = this.tf.getTransferFunction();
+	for(var i=0; i<this.tf.width; i++){
+		var r = transfer_function[4*i];
+		var g = transfer_function[4*i+1];
+		var b = transfer_function[4*i+2];
+		var a = transfer_function[4*i+3]/256;
+		ctx.fillStyle = "rgba("+r+","+g+","+b+","+a*0.5+")";
+		//ctx.fillStyle = "rgba("+r+","+g+","+b+",0.1)";
+		ctx.fillRect(this._canvas_margin+i,this._canvas_margin,1,this._canvas_res);
 	}
-
-	//Draw TF points
-	var pi2 = Math.PI*2;
-	var radius = this._r;
-	var points = this.tf.points;
-	for(var p of points){
-		var r = 255*p.r;
-		var g = 255*p.g;
-		var b = 255*p.b;
-		ctx.fillStyle = "rgb("+r+","+g+","+b+")";
-		if(p == this.selected) ctx.strokeStyle = "rgb(255,255,255)";
-		else ctx.strokeStyle = "rgb(0,0,0)";
-
-		var x = p.x * w;
+	
+	var v;
+	ctx.lineWidth = 3;
+	var positionOffsets = {
+		r: 0,
+		g: 1,
+		b: 2,
+		a: 3
+	};
+	var strokeStyles = {
+		r: "rgba(255,0,0,0.3)",
+		g: "rgba(0,255,0,0.3)",
+		b: "rgba(0,0,255,0.3)",
+		a: "rgba(128,128,128,0.3)"
+	};
+	
+	for(var c of ["r", "g", "b", "a"]){
+		ctx.strokeStyle = strokeStyles[c];
 		ctx.beginPath();
-		ctx.ellipse(x,hh,radius,radius,0,0,pi2);
-		ctx.fill();
-		ctx.beginPath();
-		ctx.ellipse(x,hh,radius,radius,0,0,pi2);
+		v = transfer_function[positionOffsets[c]];
+		ctx.moveTo(this._canvas_margin, this._canvas_margin+255-v);
+		for(var i=1; i<transfer_function.length; i++){
+			var v = transfer_function[4*i+positionOffsets[c]];
+			ctx.lineTo(this._canvas_margin+i, this._canvas_margin+256-v);
+		}
 		ctx.stroke();
 	}
-}
 
-TFEditor.prototype.render = function(){
-	if(this.visible){
-		requestAnimationFrame( this.render.bind(this) );
-		this.setSize();
-		this.drawTF();
-	}
+	return;
 }
 
 /***
@@ -1729,8 +1561,6 @@ Volumetrics.prototype.hide = function(){
 
 Volumetrics.prototype.onResize = function(){
 	var rect = this.canvas.getBoundingClientRect();
-	this.canvas.width = rect.width;
-	this.canvas.height = rect.height;
 	gl.viewport(0, 0, rect.width, rect.height);
 }
 
@@ -1956,7 +1786,8 @@ Volumetrics.prototype.updateCamera = function(dt){
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 Volumetrics.prototype.initShaders = function(){
-	this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
+	this.renderer.loadShaders("http://127.0.0.1:5500/../src/shaders.txt");
+	//this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
 }
 
 //Useful for showing possible "modes"
