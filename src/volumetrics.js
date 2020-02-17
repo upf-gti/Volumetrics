@@ -2,137 +2,164 @@
 
 /***
  * === VOLUMETRICS.js ===
- * v1.0
+ * v1.1
  ***/
 
+/***
+ * ==Texture3D class==
+ ***/
+var Texture3D = function Texture3D(o){
+	this.width = 0;		//If any dimension is 0 it will not create a texture
+	this.height = 0;
+	this.depth = 0;
+
+	//Data format and encoding
+	//Check https://www.khronos.org/registry/webgl/specs/latest/2.0/#3.7.6 texImage2D to see possible combinations
+	//For example for pre-computed gradients {format: gl.RGB, type: gl.UNSIGNED_BYTE, internalFormat: gl.RGB8}
+	//Note that using high precision types (for example gl.UNSIGNED_INT) can easily reach the GPU's texture allocation limit
+	this.format = gl.RED;			//CPU buffer
+	this.type = gl.UNSIGNED_BYTE;	//Encoding
+	this.internalFormat = gl.R8;	//Storing in GPU
+
+	this._data = null;				//Must be view, not buffer
+	this._texture = null;
+
+	if(o) this.configure(o);
+}
+
+Texture3D.prototype.configure = function(o){
+	this.width = parseInt(o.width) || 0;
+	this.height = parseInt(o.height) || 0;
+	this.depth = parseInt(o.depth) || 0;
+	
+	this.format = o.format || gl.RED;
+	this.type = o.type || gl.UNSIGNED_BYTE;
+	this.internalFormat = o.internalFormat || gl.R8;
+
+	this._data = o.data || null;
+
+	this.prepare();
+}
+
+//If all attributes are correct it also uploads the data
+Texture3D.prototype.prepare = function(){
+	this._texture = new GL.Texture(this.width, this.height, {depth: this.depth, pixel_data: this._data, texture_type: GL.TEXTURE_3D, format: this.format, internalFormat: this.internalFormat, type: this.type, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE});
+}
+
+Texture3D.prototype.upload = function(data){
+	this._data = data || this._data;
+
+	if(!this._data || this._data.length != this.width*this.height*this.depth){
+		console.warn("Data length does not match texture dimensions");
+	}
+
+	this._texture.uploadData(this._data, {}, false);
+}
 
 /***
  * ==Volume class==
  * Describes a 3D dataset
  ***/
-var Volume = function Volume(){
-	//Length of dimensions
+var Volume = function Volume(o){
+	//Dimensions size
 	this.width = 0;
 	this.height = 0;
 	this.depth = 0;
 
-	//Distance between voxels in each dimension
+	//Distance between voxels (some scans use different distances in each dimension)
 	this.widthSpacing = 1;
 	this.heightSpacing = 1;
 	this.depthSpacing = 1;
 
-	//Number of bits per voxel (only multiples of 8)
-	this.voxelDepth = 8;
-	this._voxelDepthBytes = this.voxelDepth/8;
-
-	//Number of channels per voxel (e.g. 1 for grayscale, 3 for RGB)
-	this.channels = 1;
+	//Voxel info
+	this.voxelBytes = 1;	//Bytes per channel
+	this.voxelChannels = 1;	//Channels
 
 	//Arraybuffer with all voxels. Dimensions increase in this order: width, height, depth
-	this._dataBuffer = null;
-	this._dataView = null;
-
-	//Values that need to be precomputed. They only make sense in the case of 1 channel
-	this._histogramBuffer = null;
-	this._gradientBuffer = null;
-
-	//GLTextures
-	this._dataTexture = null;
-	this._gradientTexture = null;
+	this._size = 0;
+	this._data = null;
 
 	//Auxiliar
-	this._voxelSize = null;
-	this._byteSize = null;
 	this._min = null;
 	this._max = null;
+
+	if(o) this.configure(o);
+
+	this._texture; //Should be managed outisde Volume class
 }
 
-Volume.create = function(width, height, depth, options, dataBuffer){
-	var vol = new Volume();
-	vol.setVolume(width, height, depth, options, dataBuffer);
-	return vol;
+Volume.prototype.configure = function(o){
+	this.width = o.width || this.width;
+	this.height = o.height || this.height;
+	this.depth = o.depth || this.depth;
+
+	this.widthSpacing	= o.widthSpacing	|| this.widthSpacing;
+	this.heightSpacing	= o.heightSpacing	|| this.heightSpacing;
+	this.depthSpacing	= o.depthSpacing	|| this.depthSpacing;
+	this.voxelBytes		= o.voxelBytes		|| this.voxelBytes;
+	this.voxelChannels	= o.voxelChannels	|| this.voxelChannels;
+
+	if(this.voxelChannels < 1 || this.voxelChannels > 4){
+		console.warn("There should be at least 1 channel and at most 4.");
+	}
+	this._computeSize();
+	this._data = o.data || this._data;
+
+	if(!this._data){
+		this._createArrayView(o.buffer);
+	}	
 }
 
-Volume.clone = function(volume){
-	return Volume.create(volume.width, volume.height, volume.depth, {widthSpacing: volume.widthSpacing, heightSpacing: volume.heightSpacing, depthSpacing: volume.depthSpacing, voxelDepth: volume.voxelDepth, channels: volume.channels}, volume._dataBuffer)
+//Computes theoretical size of data in bytes
+Volume.prototype._computeSize = function(){
+	this._size = this.width * this.height * this.depth * this.voxelBytes * this.voxelChannels;
+	if(this._size == 0 || this._size % (this.voxelBytes*this.voxelChannels) != 0){
+		console.warn("Size does not seem correct.");
+		return false;
+	}
+	return true;
 }
 
-Volume.prototype.setVolume = function(width, height, depth, options, dataBuffer){
-	if(width < 1 || height < 1 || depth < 1 || dataBuffer == null){
-		console.error("Volume dimensions must be positive integers and dataBuffer must exist");
+//Creates an unsigned int arrayview based on the attribute values
+//Other types must be created manually
+Volume.prototype._createArrayView = function(aBuffer){
+	if(!this._computeSize()){
 		return;
 	}
-
-	this.width = width;
-	this.height = height;
-	this.depth = depth;
-
-	options = options || {};
-	this.widthSpacing	= options.widthSpacing	|| this.widthSpacing;
-	this.heightSpacing	= options.heightSpacing || this.heightSpacing;
-	this.depthSpacing	= options.depthSpacing	|| this.depthSpacing;
-	this.voxelDepth		= options.voxelDepth	|| this.voxelDepth;
-	this._voxelDepthBytes = this.voxelDepth/8;
-	this.channels		= options.channels		|| this.channels;
-	if((this.voxelDepth / this.channels) % 8 != 0){
-		console.warn("Only works with multiples of 8!")
+	aBuffer = aBuffer || new ArrayBuffer(this._size);
+	var aView = null;
+	if(this.voxelBytes == 1){
+		aView = new Uint8Array(aBuffer);
+	}else if(this.voxelBytes == 2){
+		aView = new Uint16Array(aBuffer);
+	}else if(this.voxelBytes == 4){
+		aView = new Uint32Array(aBuffer);
 	}
-
-	this._voxelSize = this.width * this.height * this.depth;
-	this._byteSize = this._voxelSize * this._voxelDepthBytes;
-
-	this._dataBuffer = dataBuffer;
-	this._dataView = null;
-	if(this.voxelDepth == 8){
-		this._dataView = new Uint8Array(this._dataBuffer);
-	}else if(this.voxelDepth == 16){
-		this._dataView = new Uint16Array(this._dataBuffer);
-	}else if(this.voxelDepth == 32){
-		this._dataView = new Float32Array(this._dataBuffer);
-	}
-	
-
-	//Erase previous values if it's updated
-	this._histogram = null;
-	this._gradient = null;
+	this._data = aView;
 }
 
 Volume.prototype.isValid = function(){
-	if(this.width > 0 && this.height > 0 && this.depth > 0 && this._dataBuffer != null){
-		return this._byteSize == this._dataBuffer.byteLength;
-	}
-	return false;
+	return this._computeSize();
 }
 
+//This should be at most an static method that returns a Texture3D to be managed outside
+//Also let option parameters to define format from outside
 Volume.prototype.getDataTexture = function(){
 	if(!this.isValid()) return false;
 
-	var internalFormat = gl.R8;
-	var format = gl.RED;
-	var type = gl.UNSIGNED_BYTE;
-
-	if(this.voxelDepth == 16){
-		internalFormat = gl.R16F;
-		format = gl.RED;
-		type = gl.HALF_FLOAT;
-	}else if(this.voxelDepth == 32){
-		internalFormat = gl.R32F;
-		format = gl.RED;
-		type = gl.FLOAT;
+	if(!this._texture){
+		var o = {width: this.width, height: this.height, depth: this.depth, format: gl.RED, type: gl.UNSIGNED_BYTE, internalFormat: gl.R8, data: this._data};
+		this._texture = new Texture3D(o);
 	}
 
-	if(this._dataTexture == null){
-		this._dataTexture = new GL.Texture(this.width, this.height, {depth: this.depth, pixel_data: this._dataView, texture_type: GL.TEXTURE_3D, format: format, internalFormat: internalFormat, type: type, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE});
-	}
-
-	return this._dataTexture;
+	return this._texture._texture;
 }
 
 Volume.prototype.uploadDataTexture = function(){
-	if(this._dataTexture == null){
+	if(this._texture == null){
 		this.getDataTexture();
 	}else{
-		this._dataTexture.uploadData(this._dataView, {}, false);
+		this._texture.upload(this._data);
 	}
 }
 
@@ -338,7 +365,7 @@ VolumeLoader.parseVLBuffers = async function(buffers, onend, oninfo){
 	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
 
 	for(var vl of vls){
-		var volume = Volume.create(vl.width, vl.height, vl.depth, {widthSpacing: vl.widthSpacing, heightSpacing: vl.heightSpacing, depthSpacing: vl.depthSpacing, channels: vl.channels, voxelDepth: vl.voxelDepth}, vl.data);
+		var volume = new Volume({width: vl.width, height: vl.height, depth: vl.depth, widthSpacing: vl.widthSpacing, heightSpacing: vl.heightSpacing, depthSpacing: vl.depthSpacing, voxelChannels: vl.voxelChannels, voxelBytes: vl.voxelBytes, buffer: vl.data});
 		vl.volume = volume;
 		volumes.push(volume);
 	}
@@ -375,8 +402,8 @@ VolumeLoader._parseVL1 = function(buffer, view32, view32F){
 	vl.widthSpacing = view32F[4];
 	vl.heightSpacing = view32F[5];
 	vl.depthSpacing = view32F[6];
-	vl.channels = view32[7];
-	vl.voxelDepth = view32[8];
+	vl.voxelChannels = view32[7];
+	vl.voxelBytes = view32[8] / 8;
 	vl.data = buffer.slice(4*headerElements);
 	return vl;
 }
@@ -475,13 +502,12 @@ VolumeLoader.parseDicomBuffers = async function(buffers, onend, oninfo){
 		var heightSpacing = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.pixelSpacing)[1] || 1;
 		var depthSpacing  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.sliceThickness)[0] || 1;
 
-		var channels = 1;	//TODO
-		var voxelDepth = 8; //TODO
-		var voxelBytes = voxelDepth/8;
+		var voxelChannels = 1;	//TODO infer from dicom metadata
+		var voxelBytes = 1;		//TODO infer from dicom metadata
 
 		var totalVoxels = width * height * depth;
-		var totalBytes = totalVoxels * voxelBytes;
-		var sliceValues = width * height * channels;
+		var totalBytes = totalVoxels * voxelBytes * voxelChannels;
+		var sliceValues = width * height * voxelChannels;
 
 		var voxelData = new ArrayBuffer(totalBytes);
 		var view = new Uint8Array(voxelData);	//TODO depending of voxelDepth and data type
@@ -492,7 +518,7 @@ VolumeLoader.parseDicomBuffers = async function(buffers, onend, oninfo){
 			view.set(imageData, i * sliceValues);
 		}
 
-		var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelDepth: voxelDepth, channels: channels}, voxelData);
+		var volume = new Volume({width: width, height: height, depth: depth, widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelChannels: voxelChannels, voxelBytes: voxelBytes, data: view});
 		serie.volume = volume;
 		volumes.push(volume);
 	}
@@ -608,10 +634,10 @@ VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
 		var heightSpacing 	= niftiHeader.pixDims[2];
 		var depthSpacing 	= niftiHeader.pixDims[3];
 
-		var voxelDepth 	= niftiHeader.numBitsPerVoxel;
+		var voxelBytes 	= niftiHeader.numBitsPerVoxel / 8;
 		var voxelData 	= nifti.readImage(niftiHeader, niftiData);
 
-		var volume = Volume.create(width, height, depth, {widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelDepth: voxelDepth}, voxelData);
+		var volume = new Volume({width: width, height: height, depth: depth, widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelBytes: voxelBytes, buffer: voxelData});
 		nii.volume = volume;
 		volumes.push(volume);
 	}
