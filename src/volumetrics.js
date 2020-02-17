@@ -781,6 +781,8 @@ var TFEditor = function TFEditor(options){
 		channel: null,
 	};
 
+	this._needRender = true;
+
 	//TF to edit and histogram to show
 	this.tf = null;
 	this.histogramBuffer = null;
@@ -938,6 +940,7 @@ TFEditor.prototype.update = function(){
 			transfer_function[i*4+c] = Math.round(ly + f*(ry-ly));
 		}
 		this.tf._needUpload = true;
+		this._needRender = true;
 	}
 
 	this.state.prevx = this.state.x;
@@ -946,6 +949,7 @@ TFEditor.prototype.update = function(){
 
 TFEditor.prototype.render = function(){
 	if(this.tf == null) return null;
+	this._needRender = false;
 
 	var ctx = this.ctx;
 
