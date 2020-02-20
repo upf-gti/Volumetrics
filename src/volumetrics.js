@@ -91,21 +91,19 @@ Volume.prototype.isValid = function(){
 }
 
 Volume.prototype.computeMinMax = function(){
-	if(this._max != null && this._min != null) return;
+	var m = Infinity;
+	var M = -Infinity;
 
-	var min = Math.pow(2,this.voxelDepth);
-	var max = -min;
-
-	for(var i=0; i<this._voxelSize; i++){
-		var v = this._dataView[i];
-		if(v < min) min = v;
-		if(v > max) max = v;
+	for(var i=0; i<this._data.length; i++){
+		var v = this._data[i];
+		if(v < m) m = v;
+		if(v > M) M = v;
 	}
 
-	this._max = max;
-	this._min = min;
+	this._max = M;
+	this._min = m;
 }
-
+/*
 Volume.prototype.normalize = function(){
 	this.computeMinMax();
 
@@ -145,6 +143,7 @@ Volume.prototype.getHistogram = function(){
 
 	return this._histogram;
 }
+*/
 
 Volume.prototype.getVolumeAsVLBuffer = function(){
 	var vl1HeaderElements = 9;
@@ -1161,6 +1160,10 @@ VolumeNode.prototype.render = function(renderer, camera){
 VolumeNode.prototype.setVolumeUniforms = function(volume){
 	this.scaling = [volume.width*volume.widthSpacing, volume.height*volume.heightSpacing, volume.depth*volume.depthSpacing];
 	this.resolution = [volume.width, volume.height, volume.depth];
+
+	volume.computeMinMax();
+	this.uniforms.u_min_value = volume._min;
+	this.uniforms.u_max_value = volume._max;
 }
 
 //TODO
