@@ -33,8 +33,7 @@ for(var i=0; i<urlpart.length-1; i++){
     url += urlpart[i] + "/";
 }
 var vlurl = url + "texture3d.vl";
-
-downloadVL(vlurl);
+//downloadVL(vlurl);
 
 var toolCameraPan = document.getElementById("toolCameraPan");
 var toolCameraZoom = document.getElementById("toolCameraZoom");
@@ -207,7 +206,9 @@ cuttingONInput.addEventListener("click", onCuttingONOFF, false);
 
 var cuttingSliderInput = document.getElementById("cuttingSlider");
 var onCuttingSlider = function(event){
-    volumetrics.cuttingPlaneZ = cuttingSliderInput.value;
+    var plane = volumetrics.cuttingPlane;
+    plane[3] = cuttingSliderInput.value;
+    volumetrics.cuttingPlane = plane;
 }
 cuttingSliderInput.addEventListener("input", onCuttingSlider, false);
 
@@ -296,8 +297,12 @@ function downloadVL(vlurl){
             VolumeLoader.parseVLBuffers([buffer], onVolume, onVolume);
         });
 };
+
+function handleVLExample(event){
+    downloadVL();
+}
 var vlExampleButton = document.getElementById("vlExample");
-vlExampleButton.addEventListener("click", downloadVL);
+vlExampleButton.addEventListener("click", handleVLExample);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Math

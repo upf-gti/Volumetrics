@@ -1,16 +1,10 @@
 \shaders
 volumetric_default vertex.vs volumetric_default.fs
-volumetric_default_cutting_plane vertex.vs volumetric_default_cutting_plane.fs
 volumetric_xray vertex.vs volumetric_xray.fs
-volumetric_xray_cutting_plane vertex.vs volumetric_xray_cutting_plane.fs
 volumetric_mip vertex.vs volumetric_mip.fs
-volumetric_mip_cutting_plane vertex.vs volumetric_mip_cutting_plane.fs
 volumetric_picking vertex.vs volumetric_picking.fs
-volumetric_picking_cutting_plane vertex.vs volumetric_picking_cutting_plane.fs
 debug_volumetric_jittering vertex.vs debug_volumetric_jittering.fs
-debug_volumetric_jittering_cutting_plane vertex.vs debug_volumetric_jittering.fs
 debug_volumetric_depth vertex.vs debug_volumetric_depth.fs
-debug_volumetric_depth_cutting_plane vertex.vs debug_volumetric_depth_cutting_plane.fs
 
 \vertex.vs
 #version 300 es
@@ -33,6 +27,7 @@ void main() {
 #version 300 es
 precision highp float;
 precision highp sampler3D;
+precision highp usampler3D;
 in vec3 v_pos;
 in vec3 v_normal;
 in vec2 v_coord;
@@ -43,13 +38,15 @@ uniform vec3 u_position;
 uniform vec3 u_resolution;
 uniform vec4 u_background;
 uniform vec4 u_cutting_plane;
+uniform bool u_cutting_plane_active;
 uniform sampler2D u_jittering_texture;
 uniform sampler2D u_tf_texture;
-uniform sampler3D u_volume_texture;
-uniform float u_voxelScaling;
+uniform usampler3D u_volume_texture;
 uniform float u_intensity;
 uniform float u_levelOfDetail;
 uniform float u_isosurfaceLevel;
+uniform float u_min_value;
+uniform float u_max_value;
 uniform mat4 u_mvp;
 
 // Return point where the ray enters the box. If the ray originates inside the box it returns the origin.
@@ -78,7 +75,9 @@ vec4 getVoxel( in vec3 p ){
     p = i + f;
     
     p = (p - 0.5)/u_resolution;
-    return texture( u_volume_texture, p );
+    vec4 v = vec4(texture( u_volume_texture, p ));
+    v = (v - vec4(u_min_value)) / (u_max_value - u_min_value);  //Depending on format GPU will not normalize between 0 and 1
+    return v;
 }
 
 float random (vec2 st) {
@@ -117,11 +116,11 @@ float pointDepth( in vec3 p ){
 
 \fragment_interpolation
     vec3 voxs = (rs + vec3(1.0))/2.0;
-    float f = u_voxelScaling * texture( u_volume_texture, voxs ).x;
+    float f = texture( u_volume_texture, voxs ).x;
 
 \fragment_interpolation_better
     vec3 voxs = (rs + vec3(1.0))/2.0;
-    float f = u_voxelScaling * getVoxel(voxs).x;
+    float f = getVoxel(voxs).x;
 
 \fragment_classification_direct
     vec4 csrc = vec4(f,f,f,f);
@@ -181,59 +180,24 @@ void main() {
         vec3 absrs = abs(rs);
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
 
-        // Interpolation
-        #import "fragment_interpolation_better"
+        if(!u_cutting_plane_active || (u_cutting_plane.x*rs.x + u_cutting_plane.y*rs.y + u_cutting_plane.z*rs.z + u_cutting_plane.w > 0.0) ){
+            // Interpolation
+            #import "fragment_interpolation_better"
 
-        // Classification
-        #import "fragment_classification_transfer_function"
+            // Classification
+            #import "fragment_classification_transfer_function"
 
-        // Compositing
-        #import "fragment_compositing_basic"
+            // Compositing
+            #import "fragment_compositing_basic"
 
-        // Set volume depth if main isosurface level is reached
-        #import "fragment_volume_depth"
-
-        if(cdest.w >= 1.0) break;
-        rs = rs + rd;
-    }
-        
-    // Final color
-    cdest = cdest * u_intensity;
-    if(cdest.w < 0.01) discard;
-    cdest = u_background * (1.0 - cdest.w) + cdest;
-}
-
-\volumetric_default_cutting_plane.fs
-#import "fragment_headers_utils"
-
-void main() {
-    #import "fragment_volume_depth_init"
-    #import "fragment_init"
-    #import "fragment_postinit_jittering"
-
-    // Use raymarching algorithm
-    for(int i=0; i<100000; i++){
-        vec3 absrs = abs(rs);
-        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
-
-        if(u_cutting_plane.x*rs.x + u_cutting_plane.y*rs.y + u_cutting_plane.z*rs.z + u_cutting_plane.w < 0.0){
-        // Interpolation
-        #import "fragment_interpolation_better"
-
-        // Classification
-        #import "fragment_classification_transfer_function"
-
-        // Compositing
-        #import "fragment_compositing_basic"
-
-        // Set volume depth if main isosurface level is reached
-        #import "fragment_volume_depth"
+            // Set volume depth if main isosurface level is reached
+            #import "fragment_volume_depth"
         }
 
         if(cdest.w >= 1.0) break;
         rs = rs + rd;
     }
-
+        
     // Final color
     cdest = cdest * u_intensity;
     if(cdest.w < 0.01) discard;
@@ -274,42 +238,6 @@ void main() {
     cdest = u_background * (1.0 - cdest.w) + cdest;
 }
 
-\volumetric_xray_cutting_plane.fs
-#import "fragment_headers_utils"
-
-void main() {
-    #import "fragment_volume_depth_init"
-    #import "fragment_init"
-
-    // Use raymarching algorithm
-    for(int i=0; i<100000; i++){
-        vec3 absrs = abs(rs);
-        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
-
-        if(u_cutting_plane.x*rs.x + u_cutting_plane.y*rs.y + u_cutting_plane.z*rs.z + u_cutting_plane.w < 0.0){
-        // Interpolation
-        #import "fragment_interpolation_better"
-
-        // Classification
-        #import "fragment_classification_direct"
-
-        // Compositing
-        #import "fragment_compositing_xray"
-
-        // Set volume depth if main isosurface level is reached
-        #import "fragment_volume_depth"
-        }
-
-        if(cdest.w >= 1.0) break;
-        rs = rs + rd;
-    }
-
-    // Final color
-    cdest = cdest * u_intensity;
-    if(cdest.w < 0.01) discard;
-    cdest = u_background * (1.0 - cdest.w) + cdest;
-}
-
 \volumetric_mip.fs
 #import "fragment_headers_utils"
 
@@ -333,42 +261,6 @@ void main() {
 
         // Set volume depth if main isosurface level is reached
         #import "fragment_volume_depth"
-
-        if(cdest.w >= 1.0) break;
-        rs = rs + rd;
-    }
-
-    // Final color
-    cdest = cdest * u_intensity;
-    if(cdest.w < 0.01) discard;
-    cdest = u_background * (1.0 - cdest.w) + cdest;
-}
-
-\volumetric_mip_cutting_plane.fs
-#import "fragment_headers_utils"
-
-void main() {
-    #import "fragment_volume_depth_init"
-    #import "fragment_init"
-
-    // Use raymarching algorithm
-    for(int i=0; i<100000; i++){
-        vec3 absrs = abs(rs);
-        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
-
-        if(u_cutting_plane.x*rs.x + u_cutting_plane.y*rs.y + u_cutting_plane.z*rs.z + u_cutting_plane.w < 0.0){
-        // Interpolation
-        #import "fragment_interpolation_better"
-
-        // Classification
-        #import "fragment_classification_transfer_function"
-
-        // Compositing
-        #import "fragment_compositing_mip"
-
-        // Set volume depth if main isosurface level is reached
-        #import "fragment_volume_depth"
-        }
 
         if(cdest.w >= 1.0) break;
         rs = rs + rd;
@@ -418,46 +310,6 @@ void main() {
     cdest = vec4(rs, 1.0);
 }
 
-\volumetric_picking_cutting_plane.fs
-#import "fragment_headers_utils"
-
-void main() {
-    #import "fragment_volume_depth_init"
-    #import "fragment_init"
-    #import "fragment_postinit_jittering"
-
-    // Use raymarching algorithm
-    for(int i=0; i<100000; i++){
-        vec3 absrs = abs(rs);
-        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
-
-        if(u_cutting_plane.x*rs.x + u_cutting_plane.y*rs.y + u_cutting_plane.z*rs.z + u_cutting_plane.w < 0.0){
-        // Interpolation
-        #import "fragment_interpolation_better"
-
-        // Classification
-        #import "fragment_classification_transfer_function"
-
-        cdest = csrc;
-
-        // Set volume depth if main isosurface level is reached
-        #import "fragment_volume_depth"
-
-        // If isosurface level threshold is reached stop ray marching
-        if(cdest.w >= u_isosurfaceLevel) break;
-        }
-
-        rs = rs + rd;
-    }
-
-    //If isosurface level has not been reached then discard
-    if(cdest.w < u_isosurfaceLevel) discard;
-
-    //'Color' are coordinates x, y and z of ray sample termination.
-    //Alpha channel 1.0 can be used to know if there is a hit or a discard.
-    cdest = vec4(rs, 1.0);
-}
-
 \debug_volumetric_jittering.fs
 #import "fragment_headers_utils"
 
@@ -493,43 +345,6 @@ void main() {
 
         // Set volume depth if main isosurface level is reached
         #import "fragment_volume_depth"
-
-        if(cdest.w >= 1.0) break;
-        rs = rs + rd;
-    }
-
-    // Final color
-    if(cdest.w < 0.01) discard;
-    cdest = vec4( vec3(gl_FragDepth), 1.0 );
-}
-
-\debug_volumetric_depth_cutting_plane.fs
-#import "fragment_headers_utils"
-//May need to adjust camera near and far to see something clear
-
-void main() {
-    #import "fragment_volume_depth_init"
-    #import "fragment_init"
-    #import "fragment_postinit_jittering"
-
-    // Use raymarching algorithm
-    for(int i=0; i<100000; i++){
-        vec3 absrs = abs(rs);
-        if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
-
-        if(u_cutting_plane.x*rs.x + u_cutting_plane.y*rs.y + u_cutting_plane.z*rs.z + u_cutting_plane.w < 0.0){
-        // Interpolation
-        #import "fragment_interpolation_better"
-
-        // Classification
-        #import "fragment_classification_transfer_function"
-
-        // Compositing
-        #import "fragment_compositing_basic"
-
-        // Set volume depth if main isosurface level is reached
-        #import "fragment_volume_depth"
-        }
 
         if(cdest.w >= 1.0) break;
         rs = rs + rd;

@@ -6,57 +6,6 @@
  ***/
 
 /***
- * ==Texture3D class==
- ***/
-var Texture3D = function Texture3D(o){
-	this.width = 0;		//If any dimension is 0 it will not create a texture
-	this.height = 0;
-	this.depth = 0;
-
-	//Data format and encoding
-	//Check https://www.khronos.org/registry/webgl/specs/latest/2.0/#3.7.6 texImage2D to see possible combinations
-	//For example for pre-computed gradients {format: gl.RGB, type: gl.UNSIGNED_BYTE, internalFormat: gl.RGB8}
-	//Note that using high precision types (for example gl.UNSIGNED_INT) can easily reach the GPU's texture allocation limit
-	this.format = gl.RED;			//CPU buffer
-	this.type = gl.UNSIGNED_BYTE;	//Encoding
-	this.internalFormat = gl.R8;	//Storing in GPU
-
-	this._data = null;				//Must be view, not buffer
-	this._texture = null;
-
-	if(o) this.configure(o);
-}
-
-Texture3D.prototype.configure = function(o){
-	this.width = parseInt(o.width) || 0;
-	this.height = parseInt(o.height) || 0;
-	this.depth = parseInt(o.depth) || 0;
-	
-	this.format = o.format || gl.RED;
-	this.type = o.type || gl.UNSIGNED_BYTE;
-	this.internalFormat = o.internalFormat || gl.R8;
-
-	this._data = o.data || null;
-
-	this.prepare();
-}
-
-//If all attributes are correct it also uploads the data
-Texture3D.prototype.prepare = function(){
-	this._texture = new GL.Texture(this.width, this.height, {depth: this.depth, pixel_data: this._data, texture_type: GL.TEXTURE_3D, format: this.format, internalFormat: this.internalFormat, type: this.type, minFilter: gl.NEAREST, magFilter: gl.NEAREST, wrap:gl.CLAMP_TO_EDGE});
-}
-
-Texture3D.prototype.upload = function(data){
-	this._data = data || this._data;
-
-	if(!this._data || this._data.length != this.width*this.height*this.depth){
-		console.warn("Data length does not match texture dimensions");
-	}
-
-	this._texture.uploadData(this._data, {}, false);
-}
-
-/***
  * ==Volume class==
  * Describes a 3D dataset
  ***/
@@ -72,8 +21,9 @@ var Volume = function Volume(o){
 	this.depthSpacing = 1;
 
 	//Voxel info
-	this.voxelBytes = 1;	//Bytes per channel
-	this.voxelChannels = 1;	//Channels
+	this.voxelBytes = 1;	//Bytes per channel (1, 2 or 4)
+	this.voxelChannels = 1;	//Channels (1, 2, 3 or 4)
+	this.voxelType = "UI"	//Options: Unsigned integer: "UI", Integer: "I", Float: "F", Other: "O"
 
 	//Arraybuffer with all voxels. Dimensions increase in this order: width, height, depth
 	this._size = 0;
@@ -84,8 +34,6 @@ var Volume = function Volume(o){
 	this._max = null;
 
 	if(o) this.configure(o);
-
-	this._texture; //Should be managed outisde Volume class
 }
 
 Volume.prototype.configure = function(o){
@@ -140,27 +88,6 @@ Volume.prototype._createArrayView = function(aBuffer){
 
 Volume.prototype.isValid = function(){
 	return this._computeSize();
-}
-
-//This should be at most an static method that returns a Texture3D to be managed outside
-//Also let option parameters to define format from outside
-Volume.prototype.getDataTexture = function(){
-	if(!this.isValid()) return false;
-
-	if(!this._texture){
-		var o = {width: this.width, height: this.height, depth: this.depth, format: gl.RED, type: gl.UNSIGNED_BYTE, internalFormat: gl.R8, data: this._data};
-		this._texture = new Texture3D(o);
-	}
-
-	return this._texture._texture;
-}
-
-Volume.prototype.uploadDataTexture = function(){
-	if(this._texture == null){
-		this.getDataTexture();
-	}else{
-		this._texture.upload(this._data);
-	}
 }
 
 Volume.prototype.computeMinMax = function(){
@@ -234,8 +161,8 @@ Volume.prototype.getVolumeAsVLBuffer = function(){
 	view32F[4] = this.widthSpacing;
 	view32F[5] = this.heightSpacing;
 	view32F[6] = this.depthSpacing;
-	view32[7] = this.channels;
-	view32[8] = this.voxelDepth;
+	view32[7] = this.voxelChannels;
+	view32[8] = this.voxelBytes * 8;
 
 	var view8 = new Uint8Array(buffer);
     view8.set(this._dataView, headerSize);
@@ -256,8 +183,116 @@ Volume.prototype.downloadVL = function(){
 	document.body.removeChild(element);
 };
 
+//Returns a 3D Texture from a Volume data
+Volume.createTexture = function(volume, options){
+	options = options || {};
+
+	var width = parseInt(volume.width);
+	var height = parseInt(volume.height);
+	var depth = parseInt(volume.depth);
+	var channels = parseInt(volume.voxelChannels);
+	var data = volume._data;
+
+	//Check dimensions and data
+	if(width < 1 || height < 1 || depth < 1){
+		console.warn("Volume dimensions must be positive");
+		return null;
+	}
+
+	if(data == null){
+		console.warn("Creating texture without data");
+	}else if(data.length != width*height*depth*channels){
+		console.warn("Volume size does not match with data size");
+		return null;
+	}
+
+	//Cannot be overrided from outside volume info
+	options.depth = depth;
+	options.pixel_data = data;
+	options.texture_type = gl.TEXTURE_3D;
+	
+	//Check https://www.khronos.org/registry/webgl/specs/latest/2.0/#3.7.6 texImage2D to see possible combinations for format, type and internalFormat
+	//For example for pre-computed gradients {format: gl.RGB, type: gl.UNSIGNED_BYTE, internalFormat: gl.RGB8}
+	var guessParams = Volume.guessTextureParams(volume);
+
+	options.format = options.format || guessParams.format;
+	options.type = options.type || guessParams.type;
+	options.internalFormat = options.internalFormat || guessParams.internalFormat;
+	options.minFilter = options.minFilter || gl.NEAREST;
+	options.magFilter = options.magFilter || gl.NEAREST;
+	options.wrap = options.wrap || gl.CLAMP_TO_EDGE;
+
+	return new GL.Texture(width, height, options);
+}
+
+//Uploads data to an already created 3D texture
+Volume.updateTexture = function(volume, texture){
+	var width = parseInt(volume.width);
+	var height = parseInt(volume.height);
+	var depth = parseInt(volume.depth);
+	var data = volume._data;
+
+	if(texture.texture_type != gl.TEXTURE_3D){
+		console.warn("Texture type is not TEXTURE_3D");
+		return false;
+	}
+
+	if(data == null){
+		console.warn("There must be data to upload");
+		return false;
+	}
+	if(width != texture.width || height != texture.height || depth != texture.depth || data.length != texture.data.length){
+		console.warn("Texture and volume dimensions do not match");
+		return false;
+	}
+
+	texture.uploadData(data, {}, false);
+	return true;
+}
+
+Volume.guessTextureParams = function(volume){
+	var bytes = volume.voxelBytes;
+	var channels = volume.voxelChannels;
+	var type = volume.voxelType;
+
+	var guess = {
+		typeString: "",
+		formatString: "",
+		internalFormatString: "",
+		type: null,
+		format: null,
+		internalFormat: null
+	};
+
+	guess.formatString = (channels == 1 ? "RED" : channels == 2 ? "RG" : channels == 3 ? "RGB" : "RGBA");
+	guess.internalFormatString = (channels == 1 ? "R" : channels == 2 ? "RG" : channels == 3 ? "RGB" : "RGBA") + (bytes == 1 ? "8" : bytes == 2 ? "16" : "32");
+
+	switch(type){
+		case "UI":
+			guess.typeString = "UNSIGNED_";
+			guess.internalFormatString += "U";
+		case "I":
+			guess.typeString += (bytes == 1 ? "BYTE" : bytes == 2 ? "SHORT" : "INT");
+			guess.formatString += "_INTEGER";
+			guess.internalFormatString += "I";
+			break;
+		case "F":
+			guess.typeString = "FLOAT";	//1byte can't be float, 2 and 4 bytes can pass a FloatArray (there aren't HalfFloatArrays in JS)
+			break;
+		default:
+			guess.typeString = "UNSIGNED_BYTE";
+			break;
+	}
+
+	guess.type = gl[guess.typeString];
+	guess.format = gl[guess.formatString];
+	guess.internalFormat = gl[guess.internalFormatString];
+
+	return guess;
+}
+
 /***
- * ==Volume class==
+ * ==VolumeLoader class==
  * Loads Volume objects from VL, Dicom or Nifti
  ***/
 var VolumeLoader = {};
@@ -270,19 +305,46 @@ VolumeLoader.DONE = 4;
 VolumeLoader.ERROR = 5;
 
 //Dicom utils
-VolumeLoader.DicomUtils = {};
-VolumeLoader.DicomUtils.TAGS = {};
-VolumeLoader.DicomUtils.TAGS.modality 			= "00080060";
-VolumeLoader.DicomUtils.TAGS.studyDescription 	= "00081030";
-VolumeLoader.DicomUtils.TAGS.MRAcquisitionType	= "00180023"; //[1D, 2D, 3D]
-VolumeLoader.DicomUtils.TAGS.rows 				= "00280010"; //# of rows
-VolumeLoader.DicomUtils.TAGS.columns 			= "00280011"; //# of columns
-VolumeLoader.DicomUtils.TAGS.slices				= "00201002"; //# of images AKA slices, not allways defined!
-VolumeLoader.DicomUtils.TAGS.pixelSpacing 		= "00280030"; //mm between 2 centers of pixels. Value[0] is for pixels in 2 adjacent rows and value[1] is for pixels in 2 djacent columns
-VolumeLoader.DicomUtils.TAGS.sliceThickness		= "00180050"; //mm between 2 centers of pixels in adjacent slices
-VolumeLoader.DicomUtils.TAGS.samplesPerPixel 			= "00280002"; //[ 1				, 1				, 3		, 3			, 3				, 3			, 3			, 3					]
-VolumeLoader.DicomUtils.TAGS.photometricInterpretation = "00280004"; //[MONOCHROME2	, PALETTE COLOR	, RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
-VolumeLoader.DicomUtils.TAGS.photometricInterpretationOptions = ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT", "YBR_ICT", "YBR_PARTIAL_420"];
+VolumeLoader.DicomUtils = {
+	TAGS: {
+		modality 			: "00080060",
+		studyDescription 	: "00081030",
+		MRAcquisitionType	: "00180023", //[1D, 2D, 3D]
+		rows 				: "00280010", //# of rows
+		columns 			: "00280011", //# of columns
+		slices				: "00201002", //# of images AKA slices, not allways defined!
+		pixelSpacing 		: "00280030", //mm between 2 centers of pixels. Value[0] is for pixels in 2 adjacent rows and value[1] is for pixels in 2 djacent columns
+		sliceThickness		: "00180050", //mm between 2 centers of pixels in adjacent slices
+		samplesPerPixel 	: "00280002", //[ 1				, 1				, 3		, 3			, 3				, 3			, 3			, 3					]
+		photometricInterpretation : "00280004", //[MONOCHROME2	, PALETTE COLOR	, RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
+		photometricInterpretationOptions : ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT", "YBR_ICT", "YBR_PARTIAL_420"],
+	}
+};
+
+//Nifti utils
+VolumeLoader.NiftiUtils = {
+	DataTypes: {
+		0: "unknown",
+		1: "bool",
+		2: "unsigned char",
+		4: "signed short",
+		8: "signed int",
+		16: "float",
+		32: "complex",
+		64: "double",
+		128: "RGB",
+		255: "all",
+		256: "signed char",
+		512: "unsigned short",
+		768: "unsigned int",
+		1024: "long long",
+		1280: "unsigned long long",
+		1536: "long double",
+		1792: "double pair",
+		2048: "long double pair",
+		2304: "RGBA"
+	}
+};
 
 //Returns an array of values. Usually only contains 1 value inside the array. => Check Dicom Standard
 VolumeLoader.DicomUtils.getValue = function(image, tag){
@@ -623,7 +685,7 @@ VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
 		var niftiData = nii.buffer;
 
 		if(niftiHeader.dims[0] > 3){
-		    console.warn("Nifti data has more dimensions than 3, using only 3 first dimensions.");
+		    console.log("Nifti data has more dimensions than 3, using only 3 first dimensions.");
 		}
 
 		var width 	= niftiHeader.dims[1];
@@ -634,10 +696,27 @@ VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
 		var heightSpacing 	= niftiHeader.pixDims[2];
 		var depthSpacing 	= niftiHeader.pixDims[3];
 
-		var voxelBytes 	= niftiHeader.numBitsPerVoxel / 8;
-		var voxelData 	= nifti.readImage(niftiHeader, niftiData);
+		var voxelBytes = niftiHeader.numBitsPerVoxel / 8;
+		var voxelBuffer = nifti.readImage(niftiHeader, niftiData);
+		var voxelView = null;
+		switch(niftiHeader.datatypeCode){
+			case 2:		//unsigned char (byte)
+			case 128:	//RGB bytes
+			case 2304:	//RGBA bytes
+				voxelView = new Uint8Array(voxelBuffer);
+				break;
+			case 512:	//unsigned short
+				voxelView = new Uint16Array(voxelBuffer);
+				break;
+			case 768:
+				voxelView = new Uint32Array(voxelBuffer);
+				break;
+			default:
+				console.warn("Data type not covered, returning empty volume. Check dataTypeName for more info to manually create adequate view of voxelBuffer.");
+		}
 
-		var volume = new Volume({width: width, height: height, depth: depth, widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelBytes: voxelBytes, buffer: voxelData});
+		var volume = new Volume({width: width, height: height, depth: depth, widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelBytes: voxelBytes, data: voxelView});
+		nii.dataTypeName = VolumeLoader.NiftiUtils.DataTypes[niftiHeader.datatypeCode];
 		nii.volume = volume;
 		volumes.push(volume);
 	}
@@ -989,18 +1068,6 @@ TFEditor.prototype.render = function(){
 	ctx.fillStyle = "rgb(255,255,255)";
 	ctx.fillRect(this._canvas_margin,this._canvas_margin,this._canvas_res,this._canvas_res);
 
-	//Transparency squares
-	/*var square_size = 5;
-	var square_canvas_width = square_size * real_to_canvas_width;
-	var square_canvas_height = square_size * real_to_canvas_height;
-
-	ctx.fillStyle = "rgb(200,200,200)";
-	for(var i=0; i<this._canvas_res/square_canvas_width; i++){
-		for(var j=0; j<this._canvas_res/square_canvas_height; j++){
-			if((i+j)%2 == 0) ctx.fillRect(this._canvas_margin + i*square_canvas_width, this._canvas_margin + j*square_canvas_height, square_canvas_width, square_canvas_height);
-		}
-	}*/
-
 	//TF
 	var transfer_function = this.tf.getTransferFunction();
 	for(var i=0; i<this.tf.width; i++){
@@ -1054,24 +1121,22 @@ var VolumeNode = function VolumeNode(){
 VolumeNode.prototype._ctor = function(){
 	RD.SceneNode.prototype._ctor.call(this);
 
-	this.background = [0,0,0,0];
+	//background = [0,0,0,0];	//Global
+	//cuttingPlane = [A,B,C,D];	//Global
+
 	this.intensity = 1;
 	this.levelOfDetail = 100;
 	this.isosurfaceLevel = 0.5;
-	this.voxelScaling = 1;
-
-	this.cuttingPlaneActive = false;
-	this.cuttingPlaneNormal = vec3.fromValues(1,1,1);
-	this.cuttingPlanePoint  = vec3.create();
-	this.cuttingPlaneUseCameraDirection = true;
-	this.cuttingPlaneZ = 0;	//0 center, - near, + far
+	this.voxelScaling = 1;			//?
 
 	this.shader = "volumetric_default";
 	this.mesh = "proxy_box";
 	this.tf = "tf_default";
-	this.textures.jittering = "_jittering";
 
 	this.uniforms.u_local_camera_position = vec3.create();
+
+	this.uniforms.u_min_value = 0;
+	this.uniforms.u_max_value = Math.pow(2,8);
 
 	this._inverse_matrix = mat4.create();
 }
@@ -1089,27 +1154,6 @@ VolumeNode.prototype.render = function(renderer, camera){
     vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
     this.uniforms.u_local_camera_position = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
 
-    if(this.cuttingPlaneActive){
-	    if(this.cuttingPlaneUseCameraDirection){
-	    	this.cuttingPlaneNormal = vec3.clone(camera.getFront());
-	    	vec3.scale(this.cuttingPlaneNormal, this.cuttingPlaneNormal, -1);
-	    	vec3.normalize(this.cuttingPlaneNormal, this.cuttingPlaneNormal);
-
-	    	var delta = vec3.scale(vec3.create(), this.cuttingPlaneNormal, -this.cuttingPlaneZ);
-	    	this.cuttingPlanePoint = vec3.add(this.cuttingPlanePoint, vec3.create(), delta);
-	    }
-
-	    aux_vec4 = vec4.fromValues(this.cuttingPlaneNormal[0], this.cuttingPlaneNormal[1], this.cuttingPlaneNormal[2], 1);
-	    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
-	    var n = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
-
-	    aux_vec4 = vec4.fromValues(this.cuttingPlanePoint[0], this.cuttingPlanePoint[1], this.cuttingPlanePoint[2], 1);
-	    vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
-	    var p = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
-
-	    this.uniforms.u_cutting_plane = vec4.fromValues(n[0], n[1], n[2], -n[0]*p[0] - n[1]*p[1] - n[2]*p[2]);
-	}
-
 	//Render node
 	renderer.renderNode( this, camera );
 }
@@ -1117,27 +1161,14 @@ VolumeNode.prototype.render = function(renderer, camera){
 VolumeNode.prototype.setVolumeUniforms = function(volume){
 	this.scaling = [volume.width*volume.widthSpacing, volume.height*volume.heightSpacing, volume.depth*volume.depthSpacing];
 	this.resolution = [volume.width, volume.height, volume.depth];
-	if(volume.voxelDepth == 16 || volume.voxelDepth == 32){
-		this.voxelScaling = Math.pow(2,volume.voxelDepth);
-	}else{
-		this.voxelScaling = 1;
-	}
 }
 
+//TODO
 Object.defineProperty(VolumeNode.prototype, "shader", {
 	get: function() {
-		var s = this._shader;
-		if(this.cuttingPlaneActive) s+= "_cutting_plane";
-		return s;
+		return this._shader;
 	},
 	set: function(v) {
-		if(typeof v === "string" || v instanceof String){
-			if(v.endsWith("_cutting_plane"))
-				v = v.substring(0, v.length - 14);
-		}else{
-			v = "volumetric_default";
-		}
-		
 		this._shader = v;
 	},
 });
@@ -1169,15 +1200,6 @@ Object.defineProperty(VolumeNode.prototype, "resolution", {
 	},
 });
 
-Object.defineProperty(VolumeNode.prototype, "background", {
-	get: function() {
-		return this.uniforms.u_background;
-	},
-	set: function(v) {
-		this.uniforms.u_background = v;
-	},
-});
-
 Object.defineProperty(VolumeNode.prototype, "intensity", {
 	get: function() {
 		return this.uniforms.u_intensity;
@@ -1202,15 +1224,6 @@ Object.defineProperty(VolumeNode.prototype, "isosurfaceLevel", {
 	},
 	set: function(v) {
 		this.uniforms.u_isosurfaceLevel = v;
-	},
-});
-
-Object.defineProperty(VolumeNode.prototype, "voxelScaling", {
-	get: function() {
-		return this.uniforms.u_voxelScaling;
-	},
-	set: function(v) {
-		this.uniforms.u_voxelScaling = v;
 	},
 });
 
@@ -1264,6 +1277,11 @@ LabelNode.prototype.hide = function(){
 
 LabelNode.prototype.show = function(){
 	this.flags.visible = true;
+}
+
+//If !mesh this method is called without continuing the render pipeline
+LabelNode.prototype.onRender = function(renderer, camera){
+
 }
 
 extendClass( LabelNode, RD.SceneNode );
@@ -1451,7 +1469,6 @@ var Volumetrics = function Volumetrics(options){
 	this.initProxyBox();
 	this.addTransferFunction(new TransferFunction(), "tf_default");
 	this.initShaders();
-	this.initJitteringTexture(1024,1024,0.5);
 
 	this.scene = new RD.Scene();
 	this.volumeNodes = {};
@@ -1468,7 +1485,9 @@ var Volumetrics = function Volumetrics(options){
 
 	//Global uniforms
 	this.visible = options.visible;
-	this.background = options.background = options.background || [0.7,0.7,0.9,1];
+	this.background = options.background || [0.7,0.7,0.9,1];
+	this.cuttingPlane = options.cuttingPlane || [1,0,0,0];
+	this.cuttingPlaneActive = options.cuttingPlaneActive || false;
 	this.levelOfDetail = options.levelOfDetail = options.levelOfDetail || 100;
 
 
@@ -1844,17 +1863,6 @@ Volumetrics.prototype.initProxyBox = function(){
 	this.renderer.meshes["proxy_box"] = GL.Mesh.load(buffers, options);
 }
 
-Volumetrics.prototype.initJitteringTexture = function(x, y, strength){
-	var view = new Uint8Array(x*y);
-
-	for(var i=0; i<x*y; i++){
-		view[i] = Math.floor( strength*255*Math.random() );
-	}
-
-	var texture = new GL.Texture(x, y, {texture_type: GL.TEXTURE_2D, format: gl.LUMINANCE, magFilter: gl.NEAREST, wrap: gl.REPEAT, pixel_data: view});
-	this.renderer.textures._jittering = texture;
-}
-
 Volumetrics.prototype.addVolume = function(volume, name){
 	name = name || ("volume_" + Object.keys(this.volumes).length);
 
@@ -1869,7 +1877,7 @@ Volumetrics.prototype.addVolume = function(volume, name){
 	}
 
 	this.volumes[name] = volume;
-	this.renderer.textures[name] = volume.getDataTexture();
+	this.renderer.textures[name] = Volume.createTexture(volume);
 	return name;
 }
 
@@ -1965,7 +1973,8 @@ Volumetrics.prototype.removeSceneNode = function(uid){
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 Volumetrics.prototype.addVolumeNode = function(node){
-	node.background = this.background;
+	if(node._parent) return node._uid;	//TODO check if node is already used instead of this
+
 	node.levelOfDetail = this.levelOfDetail;
 
 	var volume = this.volumes[node.volume];
@@ -2179,15 +2188,38 @@ Volumetrics.prototype.setPickPositionCallback = function(f){
 }
 
 //Setters apply to all volumeNodes
+
+//background = [0,0,0,0];
+//cuttingPlane = [A,B,C,D];
+//cuttingPlaneActive bool
+
 Object.defineProperty(Volumetrics.prototype, "background", {
 	get: function() {
 		return this._background;
 	},
 	set: function(v) {
 		this._background = v;
-		for(var node of Object.values(this.volumeNodes)){
-		node.background = this.background;
-		}
+		this.renderer.setGlobalUniforms({u_background: v});
+	},
+});
+
+Object.defineProperty(Volumetrics.prototype, "cuttingPlane", {
+	get: function() {
+		return this._cuttingPlane;
+	},
+	set: function(v) {
+		this._cuttingPlane = v;
+		this.renderer.setGlobalUniforms({u_cutting_plane: v});
+	},
+});
+
+Object.defineProperty(Volumetrics.prototype, "cuttingPlaneActive", {
+	get: function() {
+		return this._cuttingPlaneActive;
+	},
+	set: function(v) {
+		this._cuttingPlaneActive = v;
+		this.renderer.setGlobalUniforms({u_cutting_plane_active: v});
 	},
 });
 
@@ -2211,30 +2243,6 @@ Object.defineProperty(Volumetrics.prototype, "shader", {
 		this._shader = v;
 		for(var node of Object.values(this.volumeNodes)){
 		node.shader = this.shader;
-		}
-	},
-});
-
-Object.defineProperty(Volumetrics.prototype, "cuttingPlaneActive", {
-	get: function() {
-		return this._cuttingPlaneActive;
-	},
-	set: function(v) {
-		this._cuttingPlaneActive = v;
-		for(var node of Object.values(this.volumeNodes)){
-		node.cuttingPlaneActive = this.cuttingPlaneActive;
-		}
-	},
-});
-
-Object.defineProperty(Volumetrics.prototype, "cuttingPlaneZ", {
-	get: function() {
-		return this._cuttingPlaneZ;
-	},
-	set: function(v) {
-		this._cuttingPlaneZ = v;
-		for(var node of Object.values(this.volumeNodes)){
-		node.cuttingPlaneZ = this.cuttingPlaneZ;
 		}
 	},
 });
