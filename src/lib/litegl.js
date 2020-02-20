@@ -82,6 +82,13 @@ GL.TYPE_LENGTH[ GL.FLOAT_MAT4 ] = 16;
 GL.SAMPLER_2D = 35678;
 GL.SAMPLER_3D = 35679;
 GL.SAMPLER_CUBE = 35680;
+//WebGL2 Samplers
+GL.INT_SAMPLER_2D = 36298;
+GL.INT_SAMPLER_3D = 36299;
+GL.INT_SAMPLER_CUBE = 36300;
+GL.UNSIGNED_INT_SAMPLER_2D = 36306;
+GL.UNSIGNED_INT_SAMPLER_3D = 36307;
+GL.UNSIGNED_INT_SAMPLER_CUBE = 36308;
 
 GL.DEPTH_COMPONENT = 6402;
 GL.ALPHA = 6406;
@@ -7591,7 +7598,9 @@ Shader.prototype.extractShaderInfo = function()
 		}
 
 		//store texture samplers
-		if(data.type == gl.SAMPLER_2D || data.type == gl.SAMPLER_CUBE || data.type == GL.SAMPLER_3D)
+		if(data.type == gl.SAMPLER_2D || data.type == gl.SAMPLER_CUBE || data.type == GL.SAMPLER_3D ||
+			data.type == gl.INT_SAMPLER_2D || data.type == gl.INT_SAMPLER_CUBE || data.type == GL.INT_SAMPLER_3D ||
+			data.type == gl.UNSIGNED_INT_SAMPLER_2D || data.type == gl.UNSIGNED_INT_SAMPLER_CUBE || data.type == GL.UNSIGNED_INT_SAMPLER_3D)
 			this.samplers[ uniformName ] = data.type;
 		
 		//get which function to call when uploading this uniform
@@ -7694,7 +7703,14 @@ Shader.getUniformFunc = function( data )
 		case GL.SAMPLER_2D:
 		case GL.SAMPLER_3D:
 		case GL.SAMPLER_CUBE:
+		case GL.INT_SAMPLER_2D:
+		case GL.INT_SAMPLER_3D:
+		case GL.INT_SAMPLER_CUBE:
+		case GL.UNSIGNED_INT_SAMPLER_2D:
+		case GL.UNSIGNED_INT_SAMPLER_3D:
+		case GL.UNSIGNED_INT_SAMPLER_CUBE:
 			func = gl.uniform1i; break;
+
 		default: func = gl.uniform1f; break;
 	}	
 	return func;
