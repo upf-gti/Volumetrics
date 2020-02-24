@@ -314,9 +314,9 @@ VolumeLoader.DicomUtils = {
 		slices				: "00201002", //# of images AKA slices, not allways defined!
 		pixelSpacing 		: "00280030", //mm between 2 centers of pixels. Value[0] is for pixels in 2 adjacent rows and value[1] is for pixels in 2 djacent columns
 		sliceThickness		: "00180050", //mm between 2 centers of pixels in adjacent slices
-		samplesPerPixel 	: "00280002", //[ 1				, 1				, 3		, 3			, 3				, 3			, 3			, 3					]
-		photometricInterpretation : "00280004", //[MONOCHROME2	, PALETTE COLOR	, RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
-		photometricInterpretationOptions : ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT", "YBR_ICT", "YBR_PARTIAL_420"],
+		samplesPerPixel 	: "00280002", 		//[ 1			, 1				 , 3	, 3			, 3				, 3			, 3			, 3					]
+		photometricInterpretation : "00280004", //[MONOCHROME2	, PALETTE COLOR	 , RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
+		photometricInterpretationOptions : 		  ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT"	, "YBR_ICT"	, "YBR_PARTIAL_420"	],
 	}
 };
 
@@ -698,18 +698,36 @@ VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
 		var voxelBytes = niftiHeader.numBitsPerVoxel / 8;
 		var voxelBuffer = nifti.readImage(niftiHeader, niftiData);
 		var voxelView = null;
+		var voxelType = "O";
 		switch(niftiHeader.datatypeCode){
 			case 2:		//unsigned char (byte)
 			case 128:	//RGB bytes
 			case 2304:	//RGBA bytes
+				voxelType = "UI";
 				voxelView = new Uint8Array(voxelBuffer);
 				break;
 			case 512:	//unsigned short
+				voxelType = "UI";
 				voxelView = new Uint16Array(voxelBuffer);
 				break;
-			case 768:
+			case 768:	//unsigned int
+				voxelType = "UI";
 				voxelView = new Uint32Array(voxelBuffer);
 				break;
+
+			case 256:	//signed byte
+				voxelType = "I";
+				voxelView = new Int8Array(voxelBuffer);
+				break;
+			case 4:		//signed short
+				voxelType = "I";
+				voxelView = new Int16Array(voxelBuffer);
+				break;
+			case 8:		//signed int
+				voxelType = "I";
+				voxelView = new Int32Array(voxelBuffer);
+				break;
+
 			default:
 				console.warn("Data type not covered, returning empty volume. Check dataTypeName for more info to manually create adequate view of voxelBuffer.");
 		}
@@ -1128,7 +1146,6 @@ VolumeNode.prototype._ctor = function(){
 	this.isosurfaceLevel = 0.5;
 	this.voxelScaling = 1;			//?
 
-	this.shader = "volumetric_default";
 	this.mesh = "proxy_box";
 	this.tf = "tf_default";
 
@@ -1138,6 +1155,16 @@ VolumeNode.prototype._ctor = function(){
 	this.uniforms.u_max_value = Math.pow(2,8);
 
 	this._inverse_matrix = mat4.create();
+
+	this.shader = null;
+	this._shader_name = "volume_shader";
+	this._shader_full_name = "";
+	this._update_shader = true;
+	this._shader_macros = {
+		TEXTURE_TYPE: 1,
+		NORMALIZE_VOXEL_VALUE: 1,
+		ISOSURFACE_MODE: 0,
+	}
 }
 
 VolumeNode.prototype.render = function(renderer, camera){
@@ -1145,13 +1172,17 @@ VolumeNode.prototype.render = function(renderer, camera){
 	renderer.setModelMatrix(this._global_matrix);
 	mat4.invert(this._inverse_matrix, this._global_matrix);
 
+	//Local camera pos
 	var aux_vec4;
-
-	//vec4 homogeneous_ro = u_im * vec4(u_camera_position, 1.0);
-    //vec3 ro = homogeneous_ro.xyz / homogeneous_ro.w;
     aux_vec4 = vec4.fromValues(camera.position[0], camera.position[1], camera.position[2], 1);
     vec4.transformMat4(aux_vec4, aux_vec4, this._inverse_matrix);
     this.uniforms.u_local_camera_position = vec3.fromValues(aux_vec4[0]/aux_vec4[3], aux_vec4[1]/aux_vec4[3], aux_vec4[2]/aux_vec4[3]);
+
+	//Shader
+	if(this._update_shader){
+		this._shader_full_name = Volumetrics._instance.getShader(this._shader_name, this._shader_macros);
+		this._update_shader = false;
+	}
 
 	//Render node
 	renderer.renderNode( this, camera );
@@ -1164,15 +1195,26 @@ VolumeNode.prototype.setVolumeUniforms = function(volume){
 	volume.computeMinMax();
 	this.uniforms.u_min_value = volume._min;
 	this.uniforms.u_max_value = volume._max;
+
+	switch(volume.voxelType){
+		case "UI":
+			this._shader_macros.TEXTURE_TYPE = 2;
+			break;
+		case "I":
+			this._shader_macros.TEXTURE_TYPE = 1;
+			break;
+		case "F":
+			this._shader_macros.TEXTURE_TYPE = 0;
+			break;
+	}
 }
 
-//TODO
 Object.defineProperty(VolumeNode.prototype, "shader", {
 	get: function() {
-		return this._shader;
+		return this._shader_full_name;
 	},
 	set: function(v) {
-		this._shader = v;
+		this._shader_name = v;
 	},
 });
 
@@ -1471,7 +1513,6 @@ var Volumetrics = function Volumetrics(options){
 	this.tfs = {};
 	this.initProxyBox();
 	this.addTransferFunction(new TransferFunction(), "tf_default");
-	this.initShaders();
 
 	this.scene = new RD.Scene();
 	this.volumeNodes = {};
@@ -1484,6 +1525,14 @@ var Volumetrics = function Volumetrics(options){
 	this.labelCallback = null;
 	this.initLabels();
 
+
+	//Shaders
+	this.volumeShaders = {};
+	this.volumeShadersUrl = options.volumeShadersUrl || "http://127.0.0.1:5500/../src/volume_shader.glsl";
+	this.volumeShaderMacrosMap = {};
+	this.volumeShaderFiles = {};
+	this.loading_shaders = false;
+	this.initShaders();
 
 
 	//Global uniforms
@@ -1540,6 +1589,8 @@ var Volumetrics = function Volumetrics(options){
 	}else{
 		this.hide();
 	}
+
+	Volumetrics._instance = this;
 }
 
 Volumetrics.MODES = {};
@@ -1550,6 +1601,8 @@ Volumetrics.MODES.CAMERAPAN = 10;
 Volumetrics.MODES.CAMERAZOOM  = 11;
 Volumetrics.MODES.CAMERAORBIT = 12;
 Volumetrics.MODES.CAMERAROTATE = 13;
+
+Volumetrics._instance = null;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Main
@@ -1839,13 +1892,41 @@ Volumetrics.prototype.updateCamera = function(dt){
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 Volumetrics.prototype.initShaders = function(){
-	this.renderer.loadShaders("http://127.0.0.1:5500/../src/shaders.txt");
-	//this.renderer.loadShaders("https://webglstudio.org/users/mfloriach/volumetricsDev/src/shaders.txt");
+	var that = this;
+	var url = this.volumeShadersUrl;
+
+	this.loading_shaders = true;
+	
+	//load shaders code from a files atlas
+	GL.loadFileAtlas( url, function(files){
+		that.volumeShaderMacrosMap = JSON.parse(files.macros_map);
+		that.volumeShaderFiles = files;
+		that.loading_shaders = false;
+	});
 }
 
-//Useful for showing possible "modes"
-Volumetrics.prototype.getShaders = function(){
-	return this.renderer.shaders;
+Volumetrics.prototype.getShader = function(shader_name, macros){
+	var full_shader_name = "vol_" + shader_name;
+
+	var k = Object.keys(macros);
+	k.sort();
+
+	var map = this.volumeShaderMacrosMap;
+
+	for(var macro of k){
+		var value = macros[macro];
+		var string_segment = " -" + macro + "=" + (map[macro] && map[macro][value] ? map[macro][value] : value);
+		full_shader_name += string_segment;
+	}
+
+	if(!this.renderer.shaders[full_shader_name]){
+		var vertex = this.volumeShaderFiles[shader_name + ".vs"] || this.volumeShaderFiles["volume_shader.vs"];
+		var fragment = this.volumeShaderFiles[shader_name + ".fs"] || this.volumeShaderFiles["volume_shader.fs"];
+
+		this.renderer.shaders[full_shader_name] = new GL.Shader(vertex, fragment, macros);
+	}
+
+	return full_shader_name;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////

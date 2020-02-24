@@ -7468,7 +7468,7 @@ Shader.expandMacros = function(macros)
 	var extra_code = ""; //add here preprocessor directives that should be above everything
 	if(macros)
 		for(var i in macros)
-			extra_code += "#define " + i + " " + (macros[i] ? macros[i] : "") + "\n";
+			extra_code += "#define " + i + " " + (macros[i] || macros[i] === 0 ? macros[i] : "") + "\n";
 	return extra_code;
 }
 

@@ -33,7 +33,7 @@ for(var i=0; i<urlpart.length-1; i++){
     url += urlpart[i] + "/";
 }
 var vlurl = url + "texture3d.vl";
-//downloadVL(vlurl);
+downloadVL(vlurl);
 
 var toolCameraPan = document.getElementById("toolCameraPan");
 var toolCameraZoom = document.getElementById("toolCameraZoom");
@@ -96,7 +96,8 @@ function onPreset2(){
 }
 
 function onPreset3(){
-    tf.fromPoints([{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:1}, {x:0.55,r:0,g:0,b:0,a:0}]);
+    tf.fromPoints([{x: 0.2, r: 0, g: 0, b: 0, a: 0}, {x: 0.2, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0}]);    
+    //tf.fromPoints([{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:1}, {x:0.55,r:0,g:0,b:0,a:0}]);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -242,6 +243,9 @@ function onVolume(response){
         node.volume = "importvol";
         node.tf = "mytf";
         volumetrics.addVolumeNode(node);
+
+        node._shader_macros.ISOSURFACE_MODE = 1;
+        node._update_shader = true;
 
     }else if(response.status == VolumeLoader.ERROR){
         console.log("Error: ", response.explanation);
