@@ -884,7 +884,7 @@ var TFEditor = function TFEditor(options){
 	this._r = 5;
 
 	this._canvas_res = 256;
-	this._canvas_margin = 5;
+	this._canvas_margin = 10;
 
 	this.ctx = null;
 	this.canvas = null;
@@ -900,7 +900,7 @@ var TFEditor = function TFEditor(options){
 		prevx: 0,
 		prevy: 0,
 		draging: false,
-		channel: null,
+		channel: [false, false, false, false]
 	};
 
 	this._needRender = true;
@@ -972,17 +972,29 @@ TFEditor.prototype.initDivs = function(newcontainer){
 	div.style.display = "table";
 	this.domElements["buttons_div"] = div;
 
-	for(var c of ["r", "g", "b", "a"]){
-		var button = document.createElement("button");
-		button.id = "TFEditor_button_"+c;
-		button.innerText = c;
-		button.style.margin = "0 auto";
-		this.domElements["button_"+c] = button;
+	var channels = ["r", "g", "b", "a"];
+	for(var c in channels){
+		var d = document.createElement("div");
+		d.style.display = "inline";
+		
+		var text = document.createElement("span");
+		text.id = "TFEditor_text_"+c;
+		text.innerText = channels[c];
+		text.style["font-family"] = "Courier New";
+		text.style["font-size"] = "12px";
+		text.style.margin = "0";
 
-		div.appendChild(button);
+		var checkbox = document.createElement("input");
+		checkbox.id = "TFEditor_checkbox_"+c;
+		checkbox.type = "checkbox";
+		checkbox.style.margin = "0 6px 0 2px";
+
+		d.appendChild(text);
+		d.appendChild(checkbox);
+		div.appendChild(d);
 
 		//Set listeners
-		button.addEventListener("click", this._onButtonClick.bind(this));
+		checkbox.addEventListener("click", this._onCheckbox.bind(this));
 	}
 	this.container.appendChild(div);
 
@@ -993,8 +1005,10 @@ TFEditor.prototype._onResize = function(event){
 	this.setSize();
 }
 
-TFEditor.prototype._onButtonClick = function(event){
-	this.state.channel = event.target.innerText;
+TFEditor.prototype._onCheckbox = function(event){
+	var c = parseInt( event.target.id[event.target.id.length-1] );
+	this.state.channel[c] = event.target.checked;
+
 }
 
 TFEditor.prototype._onMouseDown = function(event){
@@ -1041,9 +1055,8 @@ TFEditor.prototype.loop = function(){
 }
 
 TFEditor.prototype.update = function(){
-	if(this.state.dragging && this.state.channel){
+	if(this.state.dragging){
 		//change values
-		var c = (this.state.channel == "r" ? 0 : this.state.channel == "g" ? 1 : this.state.channel == "b" ? 2 : 3);
 		var lx = this.state.prevx;
 		var ly = this.state.prevy;
 		var rx = this.state.x+1;
@@ -1059,7 +1072,12 @@ TFEditor.prototype.update = function(){
 		for(var i=lx; i<rx; i++){
 			var f = (i-lx)/(rx-lx);
 			f /= 255;
-			transfer_function[i*4+c] = Math.round(ly + f*(ry-ly));
+			var v = Math.round(ly + f*(ry-ly));
+			for(var c in this.state.channel){
+				if(this.state.channel[c])
+					transfer_function[i*4+parseInt(c)] = v;
+			}
+			
 		}
 		this.tf._needUpload = true;
 		this._needRender = true;
@@ -1143,8 +1161,6 @@ VolumeNode.prototype._ctor = function(){
 
 	this.intensity = 1;
 	this.levelOfDetail = 100;
-	this.isosurfaceLevel = 0.5;
-	this.voxelScaling = 1;			//?
 
 	this.mesh = "proxy_box";
 	this.tf = "tf_default";
@@ -1518,7 +1534,7 @@ var Volumetrics = function Volumetrics(options){
 	this.volumeNodes = {};
 	this.sceneNodes = {};
 
-	this.labelRenderer = new LabelRenderer(this.container);;
+	this.labelRenderer = new LabelRenderer(this.container);
 	this.labelNodes = null;
 	this.labelLinesMesh = null;
 	this.labelLinesSceneNode = null;
@@ -1531,6 +1547,7 @@ var Volumetrics = function Volumetrics(options){
 	this.volumeShadersUrl = options.volumeShadersUrl || "http://127.0.0.1:5500/../src/volume_shader.glsl";
 	this.volumeShaderMacrosMap = {};
 	this.volumeShaderFiles = {};
+	this.volumeShaderToLoad = [];
 	this.loading_shaders = false;
 	this.initShaders();
 
@@ -1545,7 +1562,7 @@ var Volumetrics = function Volumetrics(options){
 
 
 	//State
-	this.activeMode = Volumetrics.MODES.NONE;
+	this.activeMode = Volumetrics.MODES.CAMERAORBIT;
 	this.mouse = {
 		left: false,
 		middle: false,
@@ -1573,10 +1590,10 @@ var Volumetrics = function Volumetrics(options){
 	};
 	this.initMeasure();
 
-	this.pickingTexture = null;
+	/*this.pickingTexture = null;
 	this.pickingFBO = null;
 	this.pickingCallback = null;
-	this.initPicking();
+	this.initPicking();*/
 
 	this.fps = 0;
 	this._fps = 0;
@@ -1688,10 +1705,10 @@ Volumetrics.prototype.computeProjections = function(){
 	var y = this.mouse.y;
 
 	var mouseScreenPosition = vec2.fromValues(x, y);
-	var mouseGlobalPosition = this.pickPosition(x, y);
+	//var mouseGlobalPosition = this.pickPosition(x, y);
 	var mouseCameraPosition = this.camera.getRayPlaneCollision(x, y, this.camera.target, this.camera.getFront());
 
-	return {mouseScreenPosition: mouseScreenPosition, mouseGlobalPosition: mouseGlobalPosition, mouseCameraPosition: mouseCameraPosition};
+	return {mouseScreenPosition: mouseScreenPosition, /*mouseGlobalPosition: mouseGlobalPosition,*/ mouseCameraPosition: mouseCameraPosition};
 }
 
 Volumetrics.prototype.onmousedown = function(e){
@@ -1891,18 +1908,49 @@ Volumetrics.prototype.updateCamera = function(dt){
 // Shaders
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
-Volumetrics.prototype.initShaders = function(){
-	var that = this;
-	var url = this.volumeShadersUrl;
+Volumetrics.prototype.addMacrosMapOptions = function(macros_map_str){
+	var macros_map = JSON.parse(macros_map_str);
 
+	for(var k of Object.keys(macros_map)){
+		this.volumeShaderMacrosMap[k] = macros_map[k];
+	}
+}
+
+Volumetrics.prototype.addShaders = function(shaders){
+	for(var k of Object.keys(shaders)){
+		this.volumeShaderFiles[k] = shaders[k];
+	}
+}
+
+Volumetrics.prototype.loadShaders = function(url, callback){
+	if(this.loading_shaders){
+		this.volumeShaderToLoad.push({url: url, callback, callback});
+		return;
+	}
+
+	var that = this;
 	this.loading_shaders = true;
 	
 	//load shaders code from a files atlas
 	GL.loadFileAtlas( url, function(files){
-		that.volumeShaderMacrosMap = JSON.parse(files.macros_map);
-		that.volumeShaderFiles = files;
+		if(files.macros_map){
+			that.addMacrosMapOptions(files.macros_map);
+			delete files.macros_map;
+		}
+		
+		that.addShaders(files);
 		that.loading_shaders = false;
+		
+		if(callback) callback();
+		if(that.volumeShaderToLoad.length > 0){
+			var next = that.volumeShaderToLoad.pop();
+			that.loadShaders(next.url, next.callback);
+		}
 	});
+}
+
+Volumetrics.prototype.initShaders = function(){
+	this.loadShaders(this.volumeShadersUrl);
 }
 
 Volumetrics.prototype.getShader = function(shader_name, macros){
@@ -2193,6 +2241,8 @@ Volumetrics.prototype.initMeasure = function(){
 // Picking
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
+//WIP do not use
+/*
 Volumetrics.prototype.initPicking = function(){
 	this.getFBO();
 }
@@ -2270,7 +2320,7 @@ Volumetrics.prototype.pickPosition = function(x, y){
 Volumetrics.prototype.setPickPositionCallback = function(f){
 	this.pickingCallback = f;
 }
-
+*/
 //Setters apply to all volumeNodes
 
 //background = [0,0,0,0];
@@ -2306,6 +2356,12 @@ Object.defineProperty(Volumetrics.prototype, "cuttingPlaneActive", {
 		this.renderer.setGlobalUniforms({u_cutting_plane_active: v});
 	},
 });
+
+Volumetrics.prototype.setGlobalUniform = function(name, value){
+	var uniform = {};
+	uniform[name] = value;
+	this.renderer.setGlobalUniforms(uniform);
+}
 
 Object.defineProperty(Volumetrics.prototype, "levelOfDetail", {
 	get: function() {

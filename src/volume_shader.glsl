@@ -72,7 +72,6 @@ uniform usampler3D u_volume_texture;
 
 uniform float u_intensity;
 uniform float u_levelOfDetail;
-uniform float u_isosurfaceLevel;
 
 uniform vec4 u_cutting_plane;
 uniform bool u_cutting_plane_active;
@@ -147,16 +146,16 @@ void main() {
 
             // Classification
             vec4 color_sample = texture( u_tf_texture, vec2(f,0.0) );
+            color_sample.rgb = color_sample.rgb * color_sample.a; //transparency, applied this way to avoid color bleeding
             
             // Compositing
             #if ISOSURFACE_MODE == 1
-            if(color_prev.a - color_sample.a < -0.1){  //Only add first sample of each isosurface
-                color_step = vec4(1.0, 0.0, 0.0, color_sample.a*0.1);//color_sample * (1.0 - color_accumulated.w);
+            if(color_prev.a == 0.0){
+                color_step = color_sample * (1.0 - color_accumulated.w);
             }else{
                 color_step = vec4(0.0);
             }
             #else
-            color_sample.rgb = color_sample.rgb * color_sample.a; //transparency, applied this way to avoid color bleeding
             color_step = step_length * color_sample * (1.0 - color_accumulated.w);
             #endif
 

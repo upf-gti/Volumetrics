@@ -1,2 +1,6 @@
 ﻿*.vl
 *.code-workspace
+*.dcm
+*.nii
+*.gz
+*.zip
