@@ -130,7 +130,7 @@ function onPreset2(){
 }
 
 function onPreset3(){
-    tf.fromPoints([{x: 0, r: 0, g: 0, b: 1, a: 0.5}, {x: 1, r: 1, g: 0, b: 0, a: 0.5}]);    
+    tf.fromPoints([{x: 0, r: 0, g: 1, b: 1, a: 0.5}, {x: 1, r: 1, g: 0, b: 0, a: 0.5}]);    
     
     //tf.fromPoints([{x: 0.2, r: 0, g: 0, b: 0, a: 0}, {x: 0.2, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0}]);    
     //tf.fromPoints([{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:1}, {x:0.55,r:0,g:0,b:0,a:0}]);
