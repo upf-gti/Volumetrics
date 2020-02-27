@@ -41,6 +41,10 @@ function initVolumetrics(){
 }
 
 function onVolumetricsInit(){
+    volumetrics.setGlobalUniform("u_isosurface_value", 0.35);
+    volumetrics.setGlobalUniform("u_isosurface_margin", 0.3);
+    volumetrics.levelOfDetail = 400;
+
     volumeNode.shader = "simple_isosurface";
     download("../samples/1010_brain_mr_02.nii");
 }
@@ -130,7 +134,7 @@ function onPreset2(){
 }
 
 function onPreset3(){
-    tf.fromPoints([{x: 0, r: 0, g: 1, b: 1, a: 0.5}, {x: 1, r: 1, g: 0, b: 0, a: 0.5}]);    
+    tf.fromPoints([{x: 0, r: 0.8, g: 0.8, b: 0.8, a: 1}, {x: 1, r: 0.8, g: 0.8, b: 0.8, a: 1}]);    
     
     //tf.fromPoints([{x: 0.2, r: 0, g: 0, b: 0, a: 0}, {x: 0.2, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0}]);    
     //tf.fromPoints([{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:1}, {x:0.55,r:0,g:0,b:0,a:0}]);
