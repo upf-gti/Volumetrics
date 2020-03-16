@@ -12,6 +12,10 @@ var tf = null;
 
 init();
 
+function computeGradient(volume){
+
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // APP INIT FUNCTIONS
 ///////////////////////////////////////////////////////////////////////////////////////////////
@@ -19,8 +23,6 @@ init();
 function init(){
     initVolumetrics();
     initListeners();
-
-    
 }
 
 function initVolumetrics(){
@@ -42,7 +44,7 @@ function initVolumetrics(){
 
 function onVolumetricsInit(){
     volumetrics.setGlobalUniform("u_isosurface_value", 0.35);
-    volumetrics.setGlobalUniform("u_isosurface_margin", 0.3);
+    volumetrics.setGlobalUniform("u_isosurface_margin", 0.25);
     volumetrics.levelOfDetail = 400;
 
     volumeNode.shader = "simple_isosurface";
@@ -76,17 +78,6 @@ function initListeners(){
     toolCameraReset.addEventListener("click", function(){
         volumetrics.initCamera();
     }, false);
-
-    toolAnnotation.addEventListener("click", function(){
-        volumetrics.activeMode = Volumetrics.MODES.PICKPOSITION;
-        appMode = "annotation";
-    }, false);
-
-    toolRemoveAnnotation.addEventListener("click", function(){
-        volumetrics.activeMode = Volumetrics.MODES.NONE;
-        appMode = "removeAnnotation";
-    }, false);
-
 
     var preset1 = document.getElementById("preset1");
     var preset2 = document.getElementById("preset2");
@@ -134,28 +125,8 @@ function onPreset2(){
 }
 
 function onPreset3(){
-    tf.fromPoints([{x: 0, r: 0.8, g: 0.8, b: 0.8, a: 1}, {x: 1, r: 0.8, g: 0.8, b: 0.8, a: 1}]);    
-    
-    //tf.fromPoints([{x: 0.2, r: 0, g: 0, b: 0, a: 0}, {x: 0.2, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0.5},{x: 0.3, r: 0, g: 0, b: 0, a: 0}]);    
-    //tf.fromPoints([{x:0.45,r:0,g:0,b:0,a:0}, {x:0.5,r:1,g:0,b:0,a:1}, {x:0.55,r:0,g:0,b:0,a:0}]);
+    tf.fromPoints([{x: 0, r: 1, g: 1, b: 1, a: 1}, {x: 1, r: 1, g: 1, b: 1, a: 1}]);    
 }
-
-///////////////////////////////////////////////////////////////////////////////////////////////
-// Labels
-///////////////////////////////////////////////////////////////////////////////////////////////
-
-var labelNode = null;
-
-function onLabelInfo(info){
-    if(info.click){
-        if(appMode == "removeAnnotation"){
-            volumetrics.removeLabelNode(info.uid);
-        }
-    }else if(info.input){
-        //console.log("Text changed! ", info.labelNode.text);
-    }
-}
-volumetrics.labelCallback = onLabelInfo;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 // Load Volumes from files

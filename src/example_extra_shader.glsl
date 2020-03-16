@@ -42,10 +42,7 @@ uniform float u_isosurface_value;
 uniform float u_isosurface_margin;
 
 //Global
-const vec3 light_pos = vec3(10.0, 10.0, 0.0);
-const vec3 right_vec = vec3(1.0, 0.0, 0.0);
-const vec3 up_vec = vec3(0.0, 1.0, 0.0);
-const vec3 back_vec = vec3(0.0, 0.0, 1.0);
+const vec3 light_pos = vec3(10.0, 0.0, 0.0);
 
 // Return point where the ray enters the box. If the ray originates inside the box it returns the origin.
 vec3 rayOrigin(in vec3 ro, in vec3 rd){
@@ -63,18 +60,15 @@ vec3 rayOrigin(in vec3 ro, in vec3 rd){
     return ip;
 }
 
+//Pseudo random function from thebookofshaders.com/10/
+float random (vec2 st) {
+    return fract(sin(dot(st.xy, vec2(12.9898,78.233)))* 43758.5453123);
+}
+
 // Returns voxel XYZW value
-vec4 getVoxel( in vec3 p ){
-    p = p*u_resolution + 0.5;
-    
-    // Better voxel interpolation from iquilezles.org/www/articles/texture/texture.htm
-    vec3 i = floor(p);
-    vec3 f = p - i;
-    f = f*f*f*(f*(f*6.0-15.0)+10.0);
-    p = i + f;
-    
-    p = (p - 0.5)/u_resolution;
-    vec4 v = vec4(texture( u_volume_texture, p ));
+vec4 getVoxel( vec3 pos ){
+    vec3 texture_pos = 0.5*(pos + vec3(1.0)); //Voxel coordinates in texture space [0, 1]
+    vec4 v = vec4(texture( u_volume_texture, texture_pos));
 
     #if NORMALIZE_VOXEL_VALUE == 1
     v = (v - vec4(u_min_value)) / (u_max_value - u_min_value);
@@ -83,9 +77,39 @@ vec4 getVoxel( in vec3 p ){
     return v;
 }
 
-//Pseudo random function from thebookofshaders.com/10/
-float random (vec2 st) {
-    return fract(sin(dot(st.xy, vec2(12.9898,78.233)))* 43758.5453123);
+vec3 gradient(vec3 pos, float delta){
+	vec3 s1 = vec3(getVoxel(pos-vec3(delta, 0.0, 0.0)).x, getVoxel(pos-vec3(0.0, delta, 0.0)).x, getVoxel(pos-vec3(0.0, 0.0, delta)).x);
+	vec3 s2 = vec3(getVoxel(pos+vec3(delta, 0.0, 0.0)).x, getVoxel(pos+vec3(0.0, delta, 0.0)).x, getVoxel(pos+vec3(0.0, 0.0, delta)).x);
+	return (s2-s1);
+}
+
+vec3 shade(vec3 N, vec3 V, vec3 L, vec3 color){
+	//Material, change for classify
+	vec3 Ka = color;
+	vec3 Kd = color;
+	vec3 Ks = vec3(0.5);
+	float n = 100.0;
+
+	//Light
+	vec3 lightColor = vec3(0.7);
+	vec3 ambientLight = vec3(0.2);
+
+	//Halfway vector
+	vec3 H = normalize(L + V);
+	
+	//Ambient
+	vec3 ambient = Ka * ambientLight;
+	
+	//Diffuse
+	float diffuseLight = dot(L, N)*0.5+0.5;
+	vec3 diffuse = Kd * lightColor * diffuseLight;
+
+	//Specular
+	float specularLight = pow(max(dot(H, N), 0.0), n);
+	if(diffuseLight <= 0.0) specularLight = 0.0;
+	vec3 specular = Ks * lightColor * specularLight;
+
+	return ambient + diffuse + specular;
 }
 
 void main() {
@@ -103,6 +127,10 @@ void main() {
     // Introduce an offset in the ray starting position along the ray direction
     ray_sample = ray_sample - ray_direction*random(gl_FragCoord.xy);
 
+    // Variables for light computation
+    float delta = (1.0 / 100.0);
+    vec3 N, L, V;
+
     // Initialize cdest vec4 to store color
     vec4 color_accumulated = vec4(0.0);
     vec4 color_step = vec4(0.0);
@@ -112,8 +140,7 @@ void main() {
     for(int i=0; i<10000; i++){
         if(!u_cutting_plane_active || (u_cutting_plane.x*ray_sample.x + u_cutting_plane.y*ray_sample.y + u_cutting_plane.z*ray_sample.z + u_cutting_plane.w > 0.0) ){
             // Interpolation
-            vec3 voxel_sample = (ray_sample + vec3(1.0))/2.0;   //Voxel coordinates in texture space [0, 1]
-            float f = getVoxel(voxel_sample).x;
+            float f = getVoxel(ray_sample).x;
 
             // Classification
             vec4 color_sample = texture( u_tf_texture, vec2(f,0.0) );
@@ -122,20 +149,12 @@ void main() {
             // Compositing
             if(abs(f-u_isosurface_value) < u_isosurface_margin){
                 //Gradient on-the-fly
-                vec3 N = vec3(  getVoxel(voxel_sample + step_length*right_vec).x    - getVoxel(voxel_sample - step_length*right_vec).x,
-                                getVoxel(voxel_sample + step_length*up_vec).x       - getVoxel(voxel_sample - step_length*up_vec).x,
-                                getVoxel(voxel_sample + step_length*back_vec).x     - getVoxel(voxel_sample - step_length*back_vec).x);
-                //N /= 2 * step_length;   //This is to compute correct magnitude, but normalize smashes it anyway
-                N = normalize(N);
+                N = normalize(gradient(ray_sample, delta));
+                V = normalize(ray_sample-u_local_camera_position);
+                L = normalize(ray_sample - light_pos);
+                vec3 color = shade(N, V, L, color_sample.rgb);
 
-                vec3 L = normalize(light_pos - ray_sample);
-                float NdotL = dot(N, L);
-                float normalized_NdotL = (NdotL + 1.0) * 0.5; //Between 0 and 1
-
-                //Phong (without specular)
-                vec3 ambient = color_sample.rgb * 0.3;
-                vec3 diffuse = color_sample.rgb * normalized_NdotL;
-                color_accumulated = vec4(ambient + diffuse, 1.0);
+                color_accumulated = vec4(color, 1.0);
 
                 break;  //This simple isosurface only renders 1 surface. Once reached it does not render anything more.
             }
