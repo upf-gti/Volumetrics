@@ -45,6 +45,7 @@ Volume.prototype.configure = function(o){
 	this.heightSpacing	= o.heightSpacing	|| this.heightSpacing;
 	this.depthSpacing	= o.depthSpacing	|| this.depthSpacing;
 	this.voxelBytes		= o.voxelBytes		|| this.voxelBytes;
+	this.voxelType		= o.voxelType		|| this.voxelType;
 	this.voxelChannels	= o.voxelChannels	|| this.voxelChannels;
 
 	if(this.voxelChannels < 1 || this.voxelChannels > 4){
@@ -76,12 +77,31 @@ Volume.prototype._createArrayView = function(aBuffer){
 	}
 	aBuffer = aBuffer || new ArrayBuffer(this._size);
 	var aView = null;
-	if(this.voxelBytes == 1){
-		aView = new Uint8Array(aBuffer);
-	}else if(this.voxelBytes == 2){
-		aView = new Uint16Array(aBuffer);
-	}else if(this.voxelBytes == 4){
-		aView = new Uint32Array(aBuffer);
+	
+	if(this.voxelType == "I"){
+		if(this.voxelBytes == 1){
+			aView = new Int8Array(aBuffer);
+		}else if(this.voxelBytes == 2){
+			aView = new Int16Array(aBuffer);
+		}else if(this.voxelBytes == 4){
+			aView = new Int32Array(aBuffer);
+		}
+	}else if(this.voxelType == "F"){
+		if(this.voxelBytes == 2){
+			aView = new Uint16Array(aBuffer);
+		}else if(this.voxelBytes == 4){
+			aView = new Float32Array(aBuffer);
+		}else if(this.voxelBytes == 8){
+			aView = new Float64Array(aBuffer);
+		}
+	}else{
+		if(this.voxelBytes == 1){
+			aView = new Uint8Array(aBuffer);
+		}else if(this.voxelBytes == 2){
+			aView = new Uint16Array(aBuffer);
+		}else if(this.voxelBytes == 4){
+			aView = new Uint32Array(aBuffer);
+		}
 	}
 	this._data = aView;
 }
@@ -145,11 +165,11 @@ Volume.prototype.getHistogram = function(){
 }
 */
 
-Volume.prototype.getVolumeAsVLBuffer = function(){
+Volume.prototype.getVolumeAsVL1Buffer = function(){
 	var vl1HeaderElements = 9;
 	var headerSize = 4*vl1HeaderElements; //4 bytes per number in header
 
-	var buffer = new ArrayBuffer(this._dataBuffer.byteLength + headerSize);
+	var buffer = new ArrayBuffer(this._data.byteLength + headerSize);
 
 	var view32 = new Uint32Array(buffer);
 	var view32F = new Float32Array(buffer);
@@ -164,13 +184,40 @@ Volume.prototype.getVolumeAsVLBuffer = function(){
 	view32[8] = this.voxelBytes * 8;
 
 	var view8 = new Uint8Array(buffer);
-    view8.set(this._dataView, headerSize);
+	var dataview8 = new Uint8Array(this._data.buffer);
+    view8.set(dataview8, headerSize);
+
+    return view8;
+}
+
+Volume.prototype.getVolumeAsVL2Buffer = function(){
+	var vl1HeaderElements = 10;
+	var headerSize = 4*vl1HeaderElements; //4 bytes per number in header
+
+	var buffer = new ArrayBuffer(this._data.byteLength + headerSize);
+
+	var view32 = new Uint32Array(buffer);
+	var view32F = new Float32Array(buffer);
+	view32[0] = 2;
+	view32[1] = this.width;
+	view32[2] = this.height;
+	view32[3] = this.depth;
+	view32F[4] = this.widthSpacing;
+	view32F[5] = this.heightSpacing;
+	view32F[6] = this.depthSpacing;
+	view32[7] = this.voxelChannels;
+	view32[8] = this.voxelBytes * 8;
+	view32[9] = this.voxelType == "UI" ? 0 : this.voxelType == "I" ? 1 : this.voxelType == "F" ? 2 : 3;
+
+	var view8 = new Uint8Array(buffer);
+	var dataview8 = new Uint8Array(this._data.buffer);
+    view8.set(dataview8, headerSize);
 
     return view8;
 }
 
 Volume.prototype.downloadVL = function(){
-	var view8 = this.getVolumeAsVLBuffer();
+	var view8 = this.getVolumeAsVL2Buffer();
 	var blob = new Blob([view8]);
     var fakeUrl = URL.createObjectURL(blob);
 	var element = document.createElement("a");
@@ -316,7 +363,11 @@ VolumeLoader.DicomUtils = {
 		sliceThickness		: "00180050", //mm between 2 centers of pixels in adjacent slices
 		samplesPerPixel 	: "00280002", 		//[ 1			, 1				 , 3	, 3			, 3				, 3			, 3			, 3					]
 		photometricInterpretation : "00280004", //[MONOCHROME2	, PALETTE COLOR	 , RGB	, YBR_FULL	, YBR_FULL_422	, YBR_RCT	, YBR_ICT	, YBR_PARTIAL_420	]
-		photometricInterpretationOptions : 		  ["MONOCHROME2", "PALETTE COLOR", "RGB", "YBR_FULL", "YBR_FULL_422", "YBR_RCT"	, "YBR_ICT"	, "YBR_PARTIAL_420"	],
+		bitsAllocated		: "00280100", //number of bits per value
+		bitsStored			: "00280101", //number of bits actually used, must be equal or less than bits allocated
+		pixelData			: "7FE00010", //if this tag exists the data is unsigned integer
+		floatPixelData		: "7FE00008", //if this tag exists the data is float
+		doublePixelData		: "7FE00009", //if this tag exists the data is double
 	}
 };
 
@@ -426,7 +477,17 @@ VolumeLoader.parseVLBuffers = async function(buffers, onend, oninfo){
 	if(oninfo) oninfo(response);	//Informative callback, it does not contain volumes yet
 
 	for(var vl of vls){
-		var volume = new Volume({width: vl.width, height: vl.height, depth: vl.depth, widthSpacing: vl.widthSpacing, heightSpacing: vl.heightSpacing, depthSpacing: vl.depthSpacing, voxelChannels: vl.voxelChannels, voxelBytes: vl.voxelBytes, buffer: vl.data});
+		var volume = new Volume({
+			width: vl.width,
+			height: vl.height,
+			depth: vl.depth,
+			widthSpacing: vl.widthSpacing,
+			heightSpacing: vl.heightSpacing,
+			depthSpacing: vl.depthSpacing,
+			voxelChannels: vl.voxelChannels,
+			voxelBytes: vl.voxelBytes,
+			buffer: vl.data
+		});
 		vl.volume = volume;
 		volumes.push(volume);
 	}
@@ -448,6 +509,8 @@ VolumeLoader.parseVL = function(buffer){
 
 	if(vl.version == 1){
 		vl = VolumeLoader._parseVL1(buffer, view32, view32F);
+	}else if(vl.version == 2){
+		vl = VolumeLoader._parseVL2(buffer, view32, view32F);
 	}
 
 	return vl;
@@ -465,6 +528,24 @@ VolumeLoader._parseVL1 = function(buffer, view32, view32F){
 	vl.depthSpacing = view32F[6];
 	vl.voxelChannels = view32[7];
 	vl.voxelBytes = view32[8] / 8;
+	vl.voxelType = "UI";
+	vl.data = buffer.slice(4*headerElements);
+	return vl;
+}
+
+VolumeLoader._parseVL2 = function(buffer, view32, view32F){
+	var headerElements = 10;
+	var vl = {};
+	vl.version = view32[0];
+	vl.width = view32[1];
+	vl.height = view32[2];
+	vl.depth = view32[3];
+	vl.widthSpacing = view32F[4];
+	vl.heightSpacing = view32F[5];
+	vl.depthSpacing = view32F[6];
+	vl.voxelChannels = view32[7];
+	vl.voxelBytes = view32[8] / 8;
+	vl.voxelType = view32[9] == 0 ? "UI" : view32[9] == 1 ? "I" : view32[9] == 2 ? "F" : "O";
 	vl.data = buffer.slice(4*headerElements);
 	return vl;
 }
@@ -555,31 +636,83 @@ VolumeLoader.parseDicomBuffers = async function(buffers, onend, oninfo){
 
 		serie.buildSeries();
 
-		var width  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.rows)[0];
-		var height = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.columns)[0];
+		var width  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.columns)[0];
+		var height = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.rows)[0];
 		var depth  = serie.images.length;
 
 		var widthSpacing  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.pixelSpacing)[0] || 1;
 		var heightSpacing = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.pixelSpacing)[1] || 1;
 		var depthSpacing  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.sliceThickness)[0] || 1;
 
-		var voxelChannels = 1;	//TODO infer from dicom metadata
-		var voxelBytes = 1;		//TODO infer from dicom metadata
+		var voxelChannels = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.samplesPerPixel)[0] || 1;
+		var voxelBytes	  = VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.bitsAllocated)[0]/8 || 1;
+		if(voxelBytes == 1/8){ //binary data
+			//TODO
+			voxelBytes = 1;
+		}
 
 		var totalVoxels = width * height * depth;
 		var totalBytes = totalVoxels * voxelBytes * voxelChannels;
 		var sliceValues = width * height * voxelChannels;
 
-		var voxelData = new ArrayBuffer(totalBytes);
-		var view = new Uint8Array(voxelData);	//TODO depending of voxelDepth and data type
+		var buffer = new ArrayBuffer(totalBytes);
+		var view;
+
+		var voxelType = "O";
+		if(VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.pixelData) != null){	//INTEGER DATA
+			if(serie.images[0].getPixelRepresentation()){	//SIGNED
+				voxelType = "I";
+				if(voxelBytes == 1){
+					view = new Int8Array(buffer);
+				}else if(voxelBytes == 2){
+					view = new Int16Array(buffer);
+				}else{
+					view = new Int32Array(buffer);
+				}
+			}else{	//UNSIGNED
+				voxelType = "UI";
+				if(voxelBytes == 1){
+					view = new Uint8Array(buffer);
+				}else if(voxelBytes == 2){
+					view = new Uint16Array(buffer);
+				}else{
+					view = new Uint32Array(buffer);
+				}
+			}
+		}else if(VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.floatPixelData) != null ||	//FLOAT DATA
+				 VolumeLoader.DicomUtils.getValue(serie.images[0], VolumeLoader.DicomUtils.TAGS.doublePixelData) != null){
+			voxelType = "F";
+			if(voxelBytes == 4){
+				view = new Float32Array(buffer);
+			}else{
+				view = new Float64Array(buffer);
+			}
+		}
+
+		var min = Infinity;
+		var max = -Infinity;
 
 		for(var i=0; i<depth; i++){
 			var image = serie.images[i];
-			var imageData = image.getInterpretedData(true);
+			var imageDataObject = image.getInterpretedData(true, true);
+			if(imageDataObject.min < min) min = imageDataObject.min;
+			if(imageDataObject.max > max) max = imageDataObject.max;
+			var imageData = imageDataObject.data;
 			view.set(imageData, i * sliceValues);
 		}
 
-		var volume = new Volume({width: width, height: height, depth: depth, widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelChannels: voxelChannels, voxelBytes: voxelBytes, data: view});
+		var volume = new Volume({
+			width: width,
+			height: height,
+			depth: depth,
+			widthSpacing: widthSpacing,
+			heightSpacing: heightSpacing,
+			depthSpacing: depthSpacing,
+			voxelChannels: voxelChannels,
+			voxelBytes: voxelBytes,
+			voxelType: voxelType,
+			data: view
+		});
 		serie.volume = volume;
 		volumes.push(volume);
 	}
@@ -732,7 +865,17 @@ VolumeLoader.parseNiftiBuffers = function(buffers, onend, oninfo){
 				console.warn("Data type not covered, returning empty volume. Check dataTypeName for more info to manually create adequate view of voxelBuffer.");
 		}
 
-		var volume = new Volume({width: width, height: height, depth: depth, widthSpacing: widthSpacing, heightSpacing: heightSpacing, depthSpacing: depthSpacing, voxelBytes: voxelBytes, data: voxelView});
+		var volume = new Volume({
+			width: width,
+			height: height,
+			depth: depth,
+			widthSpacing: widthSpacing,
+			heightSpacing: heightSpacing,
+			depthSpacing: depthSpacing,
+			voxelBytes: voxelBytes,
+			voxelType: voxelType,
+			data: voxelView
+		});
 		nii.dataTypeName = VolumeLoader.NiftiUtils.DataTypes[niftiHeader.datatypeCode];
 		nii.volume = volume;
 		volumes.push(volume);
@@ -1156,14 +1299,15 @@ var VolumeNode = function VolumeNode(){
 VolumeNode.prototype._ctor = function(){
 	RD.SceneNode.prototype._ctor.call(this);
 
-	//background = [0,0,0,0];	//Global
-	//cuttingPlane = [A,B,C,D];	//Global
-
 	this.intensity = 1;
 	this.levelOfDetail = 100;
 
 	this.mesh = "proxy_box";
 	this.tf = "tf_default";
+
+	//I would like to put volume objects instead of id but
+	//rendeer has scene and resources separated.
+	//this._volume = null;
 
 	this.uniforms.u_local_camera_position = vec3.create();
 
@@ -1172,7 +1316,6 @@ VolumeNode.prototype._ctor = function(){
 
 	this._inverse_matrix = mat4.create();
 
-	this.shader = null;
 	this._shader_name = "volume_shader";
 	this._shader_full_name = "";
 	this._update_shader = true;
@@ -1802,7 +1945,7 @@ Volumetrics.prototype.onkey = function(e){
 Volumetrics.prototype.initCamera = function(fov, pos, target){
 	if(this.camera == null) this.camera = new RD.Camera();
 	fov = fov || 45;
-	pos = pos || [1000,1000,1000];
+	pos = pos || [0,0,1000];
 	target = target || [0,0,0];
 	this.camera.perspective( fov, gl.canvas.width / gl.canvas.height, 1, 10000 );
 	this.camera.lookAt( pos, target, [0,1,0] );
