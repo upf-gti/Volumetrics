@@ -85,23 +85,19 @@ vec3 gradient(vec3 pos, float delta){
 
 vec3 shade(vec3 N, vec3 V, vec3 L, vec3 color){
 	//Material, change for classify
-	vec3 Ka = color;
 	vec3 Kd = color;
-	vec3 Ks = vec3(0.5);
+	vec3 Ks = vec3(0.2);
 	float n = 100.0;
 
 	//Light
-	vec3 lightColor = vec3(0.7);
-	vec3 ambientLight = vec3(0.2);
+	vec3 lightColor = vec3(0.9);
 
 	//Halfway vector
 	vec3 H = normalize(L + V);
 	
-	//Ambient
-	vec3 ambient = Ka * ambientLight;
-	
 	//Diffuse
-	float diffuseLight = dot(L, N)*0.5+0.5;
+	float diffuseLight = (dot(L, N)+1.0)*0.5;
+    diffuseLight = diffuseLight * 0.6 + 0.4;
 	vec3 diffuse = Kd * lightColor * diffuseLight;
 
 	//Specular
@@ -109,23 +105,20 @@ vec3 shade(vec3 N, vec3 V, vec3 L, vec3 color){
 	if(diffuseLight <= 0.0) specularLight = 0.0;
 	vec3 specular = Ks * lightColor * specularLight;
 
-	return ambient + diffuse + specular;
+	return diffuse + specular;
 }
 
 void main() {
     // Compute ray origin and direction in volume space [-1,1]
-    vec3 ray_origin = u_local_camera_position;
     vec3 ray_exit = v_pos;
-    vec3 ray_direction = ray_exit - ray_origin;
+    vec3 ray_direction = normalize(ray_exit - u_local_camera_position);
+    vec3 ray_origin = rayOrigin(u_local_camera_position, ray_direction);
 
-    // Compute ray origin as a point on the volume space (surface or inside)
-    ray_origin = rayOrigin(ray_origin, ray_direction);
-    vec3 ray_sample = ray_origin;
-    ray_direction = normalize(ray_direction) * (1.0 / u_levelOfDetail);
+    // Ray step and sample
+    vec3 ray_step = ray_direction * (1.0 / u_levelOfDetail);
     float step_length = length(ray_direction);
 
-    // Introduce an offset in the ray starting position along the ray direction
-    ray_sample = ray_sample - ray_direction*random(gl_FragCoord.xy);
+    vec3 ray_sample = ray_origin - ray_step*random(gl_FragCoord.xy);
 
     // Variables for light computation
     float delta = (1.0 / 100.0);
@@ -144,7 +137,7 @@ void main() {
 
             // Classification
             vec4 color_sample = texture( u_tf_texture, vec2(f,0.0) );
-            color_sample.rgb = color_sample.rgb * color_sample.a; //transparency, applied this way to avoid color bleeding
+            //color_sample.rgb = color_sample.rgb * color_sample.a; //transparency, applied this way to avoid color bleeding
             
             // Compositing
             if(abs(f-u_isosurface_value) < u_isosurface_margin){
@@ -160,7 +153,7 @@ void main() {
             }
         }
 
-        ray_sample = ray_sample + ray_direction;
+        ray_sample = ray_sample + ray_step;
 
         vec3 absrs = abs(ray_sample);
         if(i > 1 && (absrs.x > 1.0 || absrs.y > 1.0 || absrs.z > 1.0)) break;
