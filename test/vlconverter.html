@@ -1,0 +1,100 @@
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style type="text/css">
+    </style>
+</head>
+<style>
+    .center {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    .background {
+        background-color: #1e2022;
+    }
+    .box {
+        background-color: #52616b;
+    }
+    input {
+        background-color: inherit;
+        width: 120px;
+        height: 20px;
+        margin: 0;
+        padding: 10px;
+        border: 0;
+    }
+    .button-text {
+        color: #00adb5;
+        font-weight: bold;
+        margin: 10px;
+        height: 40px;
+        text-align: center;
+    }
+    .text {
+        text-align: center;
+        color: #f0f5f9;
+        font-family: Arial, Helvetica, sans-serif;
+        padding: 20px;
+    }
+    .bar-background{
+        background-color: #f0f5f9;
+    }
+    .bar{
+        background-color: #00adb5;
+    }
+    p {
+        margin: 0;
+    }
+    .hide{
+        display: none;
+    }
+</style>
+<body style="margin: 0;">
+<div class="center background" style="width: 100vw; height: 100vh;">
+    <div class="box" style="width: 400px; height: 220px;">
+        <div>
+            <p class="text" style="width: 280px; margin: auto">Select a dicom folder or nifti files to create a vl file for future quick loads.</p>
+        </div>
+        <div class="center">
+            <div style="display: inline;">
+                <p>
+                    <input id="folderInput" style="display: none;" type="file" webkitdirectory multiple/>
+                    <input class="button-text" type="button" value="Browse folder" onclick="document.getElementById('folderInput').click();"/>
+                </p>
+            </div>
+            <div style="display: inline; margin-left: 40px;">
+                <p>
+                    <input id="filesInput" style="display: none;" type="file" multiple/>
+                    <input class="button-text" type="button" value="Browse files" onclick="document.getElementById('filesInput').click();"/>
+                </p>
+            </div>
+        </div>
+        <div class="center">
+            <div id="feedback-div" class="hide">
+                <div class="bar-background" style="width: 360px; height: 20px;">
+                    <div id="feedback-bar" class="bar" style="width: 0%; height: 20px;">
+                    </div>
+                </div>
+                <p id="feedback-text" class="text">
+                    
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+
+<!-- include the parser library -->
+<script src="../src/lib/gl-matrix.js"></script>
+<script src="../src/lib/litegl.js"></script>
+<script src="../src/lib/rendeer.js"></script>
+<script src="../src/lib/daikon.js"></script>
+<script src="../src/lib/nifti-reader.js"></script>
+
+<script src="../src/volumetrics.js"></script>
+
+<script src="vlconverter.js"></script>
+</html>
