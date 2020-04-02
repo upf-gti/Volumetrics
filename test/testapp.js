@@ -5,6 +5,7 @@
 //Global variables
 var volumetrics = null;
 var tfeditor = null;
+var volume = null;
 var volumes = [];       //There can be multiple volumes loaded but we only want to render one...
 var volumeNode = null;  //...in the test app, so we will only work with 1 node
 var appMode = "none";
@@ -48,6 +49,7 @@ function onVolumetricsInit(){
     volumetrics.levelOfDetail = 400;
 
     volumeNode.shader = "simple_isosurface";
+    volumeNode.rotate(-DEG2RAD*90, [1,0,0]);    //Change orientation of volume
     download("../samples/1010_brain_mr_02.nii");
 }
 
@@ -140,7 +142,8 @@ function onVolume(response){
             volumes.push(v);
         }
 
-        var volume = response.volume;
+        volume = response.volume;
+        
         volumetrics.addVolume(volume, "importvol");
 
         var node = volumeNode;
@@ -185,7 +188,8 @@ function handleInput(event){
     var vls = [];
 
     for(var file of files){
-        var ext = file.substring(file.lastIndexOf(".")+1);
+        var name = file.name;
+        var ext = name.substring(name.lastIndexOf(".")+1);
 
         if(isDicom(ext)){
             dicoms.push(file);
