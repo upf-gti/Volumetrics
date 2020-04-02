@@ -32,7 +32,7 @@ function onVolume(response){
         feedbacktext.innerText = "Done. Downloading...";
         feedbackbar.style.width = "100%";
         for(var volume of response.volumes){
-            volume.downloadVL();
+            VolumeLoader.downloadVL(volume);
         }
 
     }else if(response.status == VolumeLoader.ERROR){
